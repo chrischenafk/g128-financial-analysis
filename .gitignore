@@ -1,24 +1,59 @@
-#Environments
+# ─────────────────────────────────────────────────────────────
+# Environments & secrets  (never commit)
+# ─────────────────────────────────────────────────────────────
 .env
-.venv
+.env.local
+.env.*
+!.env.example
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
-.env.local
-.env.*secrets.json
-config/secrets.yamlcredentials.json
+secrets.json
+config/secrets.yaml
+credentials.json
 
-#Company Test Data
+# ─────────────────────────────────────────────────────────────
+# Real company data & all generated output  (never commit)
+#   These folders hold confidential financial data, the local
+#   history store, generated analysis packages, reports, and logs.
+# ─────────────────────────────────────────────────────────────
 data/raw/
+data/processed/
+output/
+logs/
 
-#Data File Types
+# ─────────────────────────────────────────────────────────────
+# Data / workbook file types  (belt-and-suspenders safety net
+#   in case a file lands outside the ignored folders above)
+# ─────────────────────────────────────────────────────────────
+*.xlsm
+*.xlsx
+*.xls
 *.csv
 *.json
-*.xml*.sqlite
+*.xml
+*.sqlite
 *.db
 *.db3
 
-#Cursor
+# ─────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─────────────────────────────────────────────────────────────
+# Editors / OS cruft
+# ─────────────────────────────────────────────────────────────
 .cursor/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
