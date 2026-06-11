@@ -1,5 +1,4 @@
-# g128-financial-analysis
-
+# G128 Financial Analysis
 Automated marketplace profit-margin analysis for G128.
 
 > **Current scope: TikTok Shop only.** The repository is named generically because the
