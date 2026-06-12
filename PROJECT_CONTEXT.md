@@ -150,8 +150,11 @@ Output of ingest: raw DataFrames + confirmed period metadata. Nothing computed y
 - **A monthly batch = two files sharing the same current period** — a MoM file (current vs prior month)
   and a YoY file (current vs same month last year). The current period must be **identical** across
   both; **assert this anchor match before merging** (current-period gross/profit gap must be $0.00).
-- **Real filename convention:** `Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm` — lowercase `t`,
-  underscores, no MoM/YoY token. The parser must tolerate this exact style.
+- **Real filename convention:** the actual sample workbooks in `data/raw/` are named
+  `Tiktok SKU-Level Profit 2026.03 vs 2026.04.xlsm` — lowercase `t`, a **dot** between year and
+  month, **spaces** around `vs`, no MoM/YoY token. An underscore variant
+  (`Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm`) also occurs; the parser tolerates **both**
+  separator styles, keying only on the `YYYY<sep>MM vs YYYY<sep>MM` number structure.
 - **Summary has many line items** (Gross, Units, Orders, Refund, Tiktok Shipping, Referral Fee,
   Affiliate commission, Refund admin fee, Affiliate Shop Ads commission, Co-funded promo fee, Campaign
   fee, AD Cost, Order ShippingEasy, ShippingEasy Supply, Returned Shipping, Other Expense, COGS, Ocean

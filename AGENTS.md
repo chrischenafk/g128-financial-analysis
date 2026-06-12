@@ -111,9 +111,12 @@ These were established by direct inspection of the real sample workbooks. Encode
   current period must be **identical** across both; assert this anchor match before merging. The
   Phase-1 reference checks exactly this (gross/profit gap must be $0.00).
 - **MoM vs YoY is inferred from the period gap** (≈1 month vs ≈12 months), not a filename label.
-- **Real filename convention** looks like `Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm`
-  (lowercase t, underscores, no MoM/YoY token). The parser must tolerate this, not demand an
-  idealized name.
+- **Real filename convention.** The actual sample workbooks in `data/raw/` are named
+  `Tiktok SKU-Level Profit 2026.03 vs 2026.04.xlsm` — lowercase `t`, a **dot** between year and
+  month, **spaces** around `vs`, no MoM/YoY token. An underscore variant
+  (`Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm`) also occurs. The parser tolerates **both**
+  separator styles (it keys only on the `YYYY<sep>MM vs YYYY<sep>MM` number structure), not an
+  idealized name. It does **not** read MoM/YoY from the name — that comes from the period gap.
 - **The Summary has more line items than any abbreviated schema example** (Ocean Freight, Customs,
   ShippingEasy Supply, Returned Shipping, multiple fee/commission lines). Carry the full line set for
   bridges; don't truncate to a sample.

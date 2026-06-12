@@ -40,10 +40,16 @@ logger = get_logger(__name__)
 # only); when other marketplaces arrive this becomes a per-marketplace setting.
 SUMMARY_SHEET_NAME = "TikTok Summary"
 
-# Strict period pattern in the filename stem: <YYYY>_<MM>_vs_<YYYY>_<MM>.
-# We are tolerant of the prefix varying (Tiktok_SKULevel_Profit_..., etc.) by
-# searching anywhere in the stem, but strict about the four-number structure.
-_FILENAME_PERIOD_RE = re.compile(r"(\d{4})_(\d{2})_vs_(\d{4})_(\d{2})")
+# Period pattern in the filename stem: <YYYY><sep><MM> vs <YYYY><sep><MM>.
+# We are strict about the four-number structure but tolerant of the separators,
+# because real workbooks arrive named "...2025.04 vs 2026.04.xlsm" (dot between
+# year/month, spaces around "vs") while other sources use underscores
+# ("..._2025_04_vs_2026_04.xlsm"). Year/month joiner may be '.', '_' or '-'; the
+# "vs" may be flanked by underscores or whitespace. We search anywhere in the
+# stem so the varying prefix (Tiktok SKU-Level Profit ..., etc.) is ignored.
+_FILENAME_PERIOD_RE = re.compile(
+    r"(\d{4})[._-](\d{2})[_\s]*vs[_\s]*(\d{4})[._-](\d{2})"
+)
 
 # In-workbook period header, e.g. "03/01/2026 - 03/31/2026". We only need the
 # START date of each range to derive the period (year, month). The layout is
