@@ -1,0 +1,28 @@
+# g128-financial-analysis — Python 3.12
+#
+# Conservative version FLOORS (>=), not exact pins. After installing,
+# run `pip freeze > requirements.lock.txt` (or pin here) to lock the
+# exact resolved versions for reproducible deploys.
+
+# ── Data ingestion & manipulation ────────────────────────────
+pandas>=2.2,<3         # DataFrames for Summary / Profit Margin sheets
+                       # pinned below 3.0: pandas 3.x changes defaults
+                       # (copy-on-write, string dtype) that could move the
+                       # to-the-penny regression targets — stay on battle-tested 2.2.x
+openpyxl>=3.1          # Excel engine that reads .xlsm workbooks
+
+# ── Period / date parsing ────────────────────────────────────
+python-dateutil>=2.8   # robust date math for MoM vs YoY gap inference
+
+# ── History store ────────────────────────────────────────────
+SQLAlchemy>=2.0        # portable ORM/Core — SQLite now, SQL Server later
+                       # (write plain, translatable SQL — no SQLite-only types)
+
+# ── Configuration / secrets ──────────────────────────────────
+python-dotenv>=1.0     # load .env into the environment (keys never hardcoded)
+
+# ── LLM (used later, last layer) ─────────────────────────────
+anthropic>=0.40        # Claude Platform SDK — external skill call, stubbed first
+
+# ── Testing ──────────────────────────────────────────────────
+pytest>=8.0            # tests for every fact-producing module

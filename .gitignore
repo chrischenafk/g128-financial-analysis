@@ -1,24 +1,15 @@
 # ─────────────────────────────────────────────────────────────
-# Environments & secrets  (never commit)
+# Secrets & environment  (never commit)
 # ─────────────────────────────────────────────────────────────
 .env
-.env.local
 .env.*
+# ...but the placeholder template IS tracked:
 !.env.example
-.venv/
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-secrets.json
-config/secrets.yaml
-credentials.json
 
 # ─────────────────────────────────────────────────────────────
 # Real company data & all generated output  (never commit)
-#   These folders hold confidential financial data, the local
-#   history store, generated analysis packages, reports, and logs.
+#   Confidential financial workbooks, the local history store,
+#   generated analysis packages, reports, and run logs.
 # ─────────────────────────────────────────────────────────────
 data/raw/
 data/processed/
@@ -26,34 +17,38 @@ output/
 logs/
 
 # ─────────────────────────────────────────────────────────────
-# Data / workbook file types  (belt-and-suspenders safety net
-#   in case a file lands outside the ignored folders above)
+# Real data / document formats  (safety net in case a file
+#   ever lands outside the ignored folders above)
 # ─────────────────────────────────────────────────────────────
 *.xlsm
 *.xlsx
-*.xls
 *.csv
-*.json
-*.xml
+*.docx
+*.pdf
 *.sqlite
-*.db
-*.db3
 
 # ─────────────────────────────────────────────────────────────
 # Python
 # ─────────────────────────────────────────────────────────────
 __pycache__/
-*.py[cod]
-*.egg-info/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
+.venv/
+venv/
 
 # ─────────────────────────────────────────────────────────────
-# Editors / OS cruft
+# OS / editor cruft
 # ─────────────────────────────────────────────────────────────
-.cursor/
-.vscode/
-.idea/
 .DS_Store
-Thumbs.db
+.cursor/
+.claude/
+
+# ─────────────────────────────────────────────────────────────
+# NOTE: .md docs, .env.example, and everything under src/, tests/,
+# and docs/ are intentionally tracked.
+#
+# Sanitized/synthetic SAMPLE data — if we ever need it for tests or
+# examples — goes in a dedicated top-level  sample_data/  folder
+# (never copied from real company files) and would be added with an
+# explicit  `git add -f sample_data/...`  to override the format
+# ignores above. Real workbooks stay in data/raw/ and never tracked.
+# ─────────────────────────────────────────────────────────────
