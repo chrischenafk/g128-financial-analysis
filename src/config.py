@@ -1,0 +1,63 @@
+"""Single source of truth for paths and settings.
+
+Everything in the pipeline imports its paths and constants from here — no magic
+strings scattered across modules.
+
+This module ONLY DECLARES. It does not create directories or write anything to
+the filesystem on import. Runtime directory creation lives in
+``src/utils/paths.py`` (and the one logging exception in ``src/utils/logger.py``).
+The single filesystem touch here is ``load_dotenv()``, which *reads* an optional
+``.env`` file if present — it never writes.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project root — derived from this file's location, so paths resolve correctly
+# no matter what the current working directory is.
+#   this file:  <PROJECT_ROOT>/src/config.py
+#   .parent  -> <PROJECT_ROOT>/src
+#   .parent  -> <PROJECT_ROOT>
+# ─────────────────────────────────────────────────────────────────────────────
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+
+# ── Input data ───────────────────────────────────────────────────────────────
+DATA_RAW: Path = PROJECT_ROOT / "data" / "raw"              # operator drops workbooks here
+DATA_PROCESSED: Path = PROJECT_ROOT / "data" / "processed"  # run manifest + history store
+
+# ── Generated output ─────────────────────────────────────────────────────────
+OUTPUT_REPORTS: Path = PROJECT_ROOT / "output" / "reports"            # final reports (never cleaned)
+OUTPUT_PACKAGES: Path = PROJECT_ROOT / "output" / "analysis_packages" # versioned packages for the skill
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+LOGS: Path = PROJECT_ROOT / "logs"
+
+# ── Specific files inside the above folders ──────────────────────────────────
+HISTORY_DB: Path = DATA_PROCESSED / "history.sqlite"   # local trailing-history store (Level 2)
+MANIFEST: Path = DATA_PROCESSED / "run_manifest.json"  # auditable record of each run
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+# Provisional schema version. Stays "0.x.y" until the package contract is locked
+# with the external skill, at which point this is bumped to "1.0.0". Changing the
+# package shape is a coordinated, versioned act — never done unilaterally.
+PACKAGE_SCHEMA_VERSION: str = "0.1.0"
+
+MARKETPLACE: str = "TikTok Shop"  # current scope — single marketplace
+CURRENCY: str = "USD"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment-backed settings (read-only load; values come from .env / the
+# environment). Secrets are never hardcoded and never logged.
+# ─────────────────────────────────────────────────────────────────────────────
+load_dotenv(PROJECT_ROOT / ".env")
+
+ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY")
+CLAUDE_MODEL: str | None = os.getenv("CLAUDE_MODEL")
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
