@@ -27,9 +27,19 @@ from src.ingest.period_parser import (
     parse_filename_periods,
 )
 
-# Real-convention filenames (the exact lowercase-t, underscore style from §5).
+# Real-convention filenames. Two separator styles occur in practice and both
+# must parse: the underscore style documented in §5
+# ("Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm") and the dot-plus-spaces
+# style of the actual sample workbooks in data/raw/
+# ("Tiktok SKU-Level Profit 2026.03 vs 2026.04.xlsm"). The parser tolerates both.
 MOM_NAME = "Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm"
 YOY_NAME = "Tiktok_SKULevel_Profit_2025_04_vs_2026_04.xlsm"
+
+# The exact format the real workbooks ship with (dot between year/month, spaces
+# around "vs"). Regression guard: these are the names actually present in
+# data/raw/, and they must parse identically to the underscore style above.
+MOM_NAME_REALFMT = "Tiktok SKU-Level Profit 2026.03 vs 2026.04.xlsm"
+YOY_NAME_REALFMT = "Tiktok SKU-Level Profit 2025.04 vs 2026.04.xlsm"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -71,6 +81,21 @@ def test_filename_mom_periods_and_order() -> None:
 
 def test_filename_yoy_periods_and_order() -> None:
     current, comparison = parse_filename_periods(Path(YOY_NAME))
+    assert current == Period(2026, 4)
+    assert comparison == Period(2025, 4)
+    assert classify_comparison(current, comparison) == "YoY"
+
+
+def test_filename_realfmt_mom_dot_and_spaces() -> None:
+    # Dot-between-year/month, spaces-around-"vs" — the actual data/raw/ style.
+    current, comparison = parse_filename_periods(Path(MOM_NAME_REALFMT))
+    assert current == Period(2026, 4)
+    assert comparison == Period(2026, 3)
+    assert classify_comparison(current, comparison) == "MoM"
+
+
+def test_filename_realfmt_yoy_dot_and_spaces() -> None:
+    current, comparison = parse_filename_periods(Path(YOY_NAME_REALFMT))
     assert current == Period(2026, 4)
     assert comparison == Period(2025, 4)
     assert classify_comparison(current, comparison) == "YoY"
