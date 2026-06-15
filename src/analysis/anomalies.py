@@ -26,6 +26,40 @@ loss) recurs every month and signals a systemic mistake, not a demand signal.
 Scope note: this file does NOT parse the data-quality sheets (unmapped ads,
 canceled shipping, orders-without-payout) — that is the next file. Anomalies
 here are derived only from metrics and comparisons.
+
+List of Rules:
+A — Confirmed decline (both lenses down): profit (or gross) down MoM and down YoY, clearing the gate. 
+    Verified example: FG-3BLAH-4P2 (MoM -$561.75, YoY -$807.18). High severity — the soft month is part of 
+    a real slide.
+B — Seasonal/volatility divergence (lenses disagree): down MoM but up YoY, or vice versa, clearing the gate. 
+    Verified: FG-1HT-4P2 (MoM -$2,245.79, YoY +$1,670.01). This overlaps the structural-movers view from 
+    comparisons.py — reference/reuse that, don't recompute divergence differently. 
+    Medium severity — flags "don't trust the single-lens read."
+C — Quiet YoY bleeder: roughly flat/positive MoM but materially down YoY. 
+    Verified: FG-1MX-4P1-1PK (MoM +$222.08, YoY -$1,065.95). Medium-high — a month-only view misses it entirely.
+D — Profit down while revenue flat/up: indicates cost/fee/ad-efficiency erosion rather than demand. 
+    Channel- or SKU-scope. Clear the gate.
+E — Ad-efficiency risk: ad spend up while profit (or profit-after-ads) down; or profit_before_ads > 0 but 
+    profit_after_ads <= 0 (the PauseAds condition from segmentation — reuse it). Also: a SKU absorbing a large 
+    share of total ad spend while declining (FG-3BLAH-4P2 took ~half of April's SKU ad spend while down on 
+    both lenses).
+F — High-revenue, low/negative margin: gross ≥ gross_p75 and margin < margin_p25 
+    (the Fix segment condition — reuse the thresholds, don't reinvent). Verified members: FG-3WTP-4P2 
+    (gross $6,160.89, 18.34%), FG-1MX-4P1-1PK ($2,230.97, 8.20%), FG-3BLAH-4P2 ($3,957.36, 7.73%).
+G — Data-integrity / cost-setup error (size-independent): a per-unit or total cost line that is implausible 
+    relative to price — specifically a single cost component exceeding the SKU's 
+    gross sale (e.g. ocean freight > gross). Verified: MC-2PR-4P11-2PK — $14.99 gross, -$31.50 ocean 
+    freight (2.1× gross), profit -$22.22. Flag regardless of the $100 gate. This is a recurring setup error, 
+    not a demand signal — mark it as category="data_integrity" so the report routes it to operations, not 
+    merchandising.
+H — Low-volume caution: very low units (e.g. single-digit) — not an anomaly itself, but a caution flag so 
+    the report/skill avoids over-interpreting tiny-sample SKUs. Attach to other flags on the same SKU rather 
+    than emitting standalone noise.
+I — (history-dependent, guard it): margin below trailing average, or ad-spend-%-of-revenue above trailing 
+    average. These need the history store. Only compute if trailing history is available; otherwise skip 
+    cleanly with a logged note — do not fabricate a baseline. (We have only three periods today, so expect 
+    this to no-op for now.)
+
 """
 
 from __future__ import annotations
