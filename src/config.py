@@ -44,10 +44,11 @@ MANIFEST: Path = DATA_PROCESSED / "run_manifest.json"  # auditable record of eac
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
-# Provisional schema version. Stays "0.x.y" until the package contract is locked
-# with the external skill, at which point this is bumped to "1.0.0". Changing the
-# package shape is a coordinated, versioned act — never done unilaterally.
-PACKAGE_SCHEMA_VERSION: str = "0.1.0"
+# Package contract version. Locked at "1.0.0" with the external skill (the
+# package layer / src/package/writer.py emits exactly this contract). Changing
+# the package shape is a coordinated, versioned act — never done unilaterally;
+# a shape change must bump this and be agreed with the skill author.
+PACKAGE_SCHEMA_VERSION: str = "1.0.0"
 
 MARKETPLACE: str = "TikTok Shop"  # current scope — single marketplace
 CURRENCY: str = "USD"
