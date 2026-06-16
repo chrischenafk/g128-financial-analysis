@@ -12,6 +12,8 @@
 #   generated analysis packages, reports, and run logs.
 # ─────────────────────────────────────────────────────────────
 data/raw/
+#Make exception for report context file
+!data/raw/report_context.md
 data/processed/
 output/
 logs/
