@@ -53,6 +53,13 @@ PACKAGE_SCHEMA_VERSION: str = "1.0.0"
 MARKETPLACE: str = "TikTok Shop"  # current scope — single marketplace
 CURRENCY: str = "USD"
 
+# ── LLM layer settings ───────────────────────────────────────────────────────
+# Model + token budget for the external skill call. The model is overridable via
+# the CLAUDE_MODEL env var (below); this is the fallback when it is unset. Kept
+# here (not hardcoded in the llm layer) so the call is configured in one place.
+CLAUDE_MODEL_DEFAULT: str = "claude-sonnet-4-6"
+CLAUDE_MAX_TOKENS: int = 8192
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-backed settings (read-only load; values come from .env / the
 # environment). Secrets are never hardcoded and never logged.
