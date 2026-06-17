@@ -9,7 +9,6 @@ the skill is invoked, the pause_turn loop continues with the container id, the
 from __future__ import annotations
 
 import json
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -18,6 +17,9 @@ import pytest
 
 from src import config
 from src.llm import claude_client
+
+# The package files _upload_package_files will include (.json / .csv / .md).
+PACKAGE_FILES = {"run_metadata.json", "channel_metrics.json", "sku_metrics_current.csv"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,13 +51,28 @@ def _response(stop_reason: str, file_ids: tuple[str, ...] = (), container_id: st
                            container=SimpleNamespace(id=container_id))
 
 
+def _stream_cm(response):
+    """A context-manager mock matching ``with client.beta.messages.stream(...) as s``.
+
+    ``s.get_final_message()`` returns ``response`` (the client now streams each
+    call instead of using ``messages.create``).
+    """
+    cm = MagicMock()
+    cm.__enter__.return_value.get_final_message.return_value = response
+    cm.__exit__.return_value = False
+    return cm
+
+
 def _client(*, create_returns=None, filenames=None) -> MagicMock:
     """A mocked anthropic client; download.write_to_file actually writes a file."""
     client = MagicMock()
-    client.beta.files.upload.return_value = SimpleNamespace(id="file_up_1")
+    # Each upload returns a distinct id derived from the filename it was given.
+    client.beta.files.upload.side_effect = (
+        lambda file, extra_headers=None: SimpleNamespace(id=f"up_{file[0]}"))
 
+    # Each stream(...) call yields a CM resolving to the next queued response.
     if create_returns is not None:
-        client.beta.messages.create.side_effect = create_returns
+        client.beta.messages.stream.side_effect = [_stream_cm(r) for r in create_returns]
 
     # retrieve_metadata: file_id → filename (default one .docx).
     fmap = filenames or {"file_doc": "G128_TikTok_PM_Report_2026-04.docx"}
@@ -95,23 +112,24 @@ def test_happy_path_uploads_invokes_downloads(tmp_path, monkeypatch, creds) -> N
     assert result == tmp_path / "reports" / "G128_TikTok_PM_Report_2026-04.docx"
     assert result.exists()
 
-    # Uploaded a real zip containing the package files (relative paths preserved).
-    upload_kwargs = client.beta.files.upload.call_args.kwargs
-    name, blob, mime = upload_kwargs["file"]
-    assert name == "package.zip" and mime == "application/zip"
-    with zipfile.ZipFile(__import__("io").BytesIO(blob)) as zf:
-        assert set(zf.namelist()) == {"run_metadata.json", "channel_metrics.json",
-                                      "sku_metrics_current.csv"}
+    # Each package file uploaded individually (not a single zip).
+    uploaded_names = [c.kwargs["file"][0] for c in client.beta.files.upload.call_args_list]
+    assert set(uploaded_names) == PACKAGE_FILES
+    assert client.beta.files.upload.call_count == len(PACKAGE_FILES)
 
-    # Initial call carried the skill + the uploaded file_id in the trigger message.
-    create_kwargs = client.beta.messages.create.call_args_list[0].kwargs
+    # Initial call carried the skill + one document block per file + a trigger text.
+    create_kwargs = client.beta.messages.stream.call_args_list[0].kwargs
     assert create_kwargs["model"] == config.CLAUDE_MODEL_DEFAULT
     assert create_kwargs["max_tokens"] == config.REPORT_MAX_TOKENS
     assert create_kwargs["container"]["skills"][0]["skill_id"] == "skill_01abc"
-    assert "<file_id>file_up_1</file_id>" in create_kwargs["messages"][0]["content"]
-    # Downloaded the docx and cleaned up the upload.
+    content = create_kwargs["messages"][0]["content"]
+    doc_blocks = [b for b in content if b["type"] == "document"]
+    assert len(doc_blocks) == len(PACKAGE_FILES)
+    assert all(b["source"] == {"type": "file", "file_id": f"up_{b['title']}"} for b in doc_blocks)
+    assert content[-1]["type"] == "text"  # trigger text comes last
+    # Downloaded the docx and cleaned up every upload.
     client.beta.files.download.assert_called_once_with(file_id="file_doc")
-    client.beta.files.delete.assert_called_once_with(file_id="file_up_1")
+    assert client.beta.files.delete.call_count == len(PACKAGE_FILES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +147,7 @@ def test_pause_turn_loop_continues_with_container_id(tmp_path, monkeypatch, cred
     result = claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
     assert result.exists()
 
-    calls = client.beta.messages.create.call_args_list
+    calls = client.beta.messages.stream.call_args_list
     assert len(calls) == 3
     # Initial call: container has skills, no id. Continuations: carry container id.
     assert "id" not in calls[0].kwargs["container"]
@@ -142,7 +160,7 @@ def test_pause_turn_exhausted_raises(tmp_path, monkeypatch, creds) -> None:
     pkg = _make_package(tmp_path)
     # Always pause_turn → never completes.
     client = _client()
-    client.beta.messages.create.return_value = _response("pause_turn")
+    client.beta.messages.stream.side_effect = lambda **kw: _stream_cm(_response("pause_turn"))
     _patch_client(monkeypatch, client)
 
     with pytest.raises(RuntimeError, match="did not complete after 15 continuations"):
@@ -185,8 +203,8 @@ def test_no_docx_raises_with_returned_filenames(tmp_path, monkeypatch, creds) ->
 
     with pytest.raises(RuntimeError, match="bridge_mom.png"):
         claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
-    # Upload still cleaned up even though the run failed.
-    client.beta.files.delete.assert_called_once_with(file_id="file_up_1")
+    # Uploads still cleaned up even though the run failed.
+    assert client.beta.files.delete.call_count == len(PACKAGE_FILES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +219,7 @@ def test_cleanup_failure_does_not_raise(tmp_path, monkeypatch, creds) -> None:
     # Delete blows up, but the report still succeeds.
     result = claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
     assert result.exists()
-    client.beta.files.delete.assert_called_once()
+    assert client.beta.files.delete.call_count == len(PACKAGE_FILES)  # all attempted
 
 
 # ─────────────────────────────────────────────────────────────────────────────

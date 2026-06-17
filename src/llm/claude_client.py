@@ -3,7 +3,7 @@
 LLM layer. The skill — deployed on the Claude Platform — owns the entire report
 workflow (load_package → charts → report.json → verify → build_doc) and runs
 those scripts inside its own code-execution container. This module's whole job is
-to (1) zip + upload the analysis package, (2) invoke the skill by ``skill_id``,
+to (1) upload the analysis package files, (2) invoke the skill by ``skill_id``,
 (3) drive the ``pause_turn`` continuation loop while the container works, and
 (4) download the branded ``.docx`` it produces.
 
@@ -20,9 +20,7 @@ re-raised so ``main.py``'s top-level handler exits cleanly — never swallowed.
 
 from __future__ import annotations
 
-import io
 import json
-import zipfile
 from pathlib import Path
 
 import anthropic
@@ -42,9 +40,9 @@ CODE_EXECUTION_TOOL = {"type": "code_execution_20250825", "name": "code_executio
 MAX_CONTINUATIONS = 15
 
 _TRIGGER_MESSAGE = (
-    "The attached zip contains the structured analysis package produced by the "
+    "The attached files are the structured analysis package produced by the "
     "G128 TikTok Shop Python pipeline (schema version {schema}). "
-    "Unzip it, run the full report workflow as specified in SKILL.md "
+    "Run the full report workflow as specified in SKILL.md "
     "(load_package → charts → report.json → verify → build_doc), "
     "and produce the branded G128_TikTok_PM_Report_.docx. "
     "The package is the source of truth — do not recompute any metric."
@@ -77,31 +75,51 @@ def _read_period(package_dir: Path) -> str:
     return str(meta["current_period"]["start"])[:7]  # "2026-04-01" → "2026-04"
 
 
-def _zip_package(package_dir: Path) -> bytes:
-    """Zip the whole package directory in memory, preserving relative paths."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(package_dir.rglob("*")):  # sorted → deterministic archive
-            if path.is_file():
-                zf.write(path, path.relative_to(package_dir).as_posix())
-    return buf.getvalue()
+def _upload_package_files(
+    client: "anthropic.Anthropic", package_dir: Path
+) -> list[tuple[str, str]]:
+    """Upload each package file individually. Returns list of (filename, file_id)."""
+    # Ordered so the skill sees the most important files first
+    INCLUDE_EXTENSIONS = {".json", ".csv", ".md"}
+    uploaded = []
+    for path in sorted(package_dir.iterdir()):
+        if path.is_file() and path.suffix.lower() in INCLUDE_EXTENSIONS:
+            content = path.read_bytes()
+            media_type = "text/plain"  # API accepts only PDF and plaintext; all our files are text
+            result = client.beta.files.upload(
+                file=(path.name, content, media_type),
+                extra_headers=FILES_BETA_HEADER,
+            )
+            uploaded.append((path.name, result.id))
+            logger.info("Uploaded %s → file_id=%s (%d bytes).", path.name, result.id, len(content))
+    if not uploaded:
+        raise RuntimeError(f"No uploadable files found in package dir: {package_dir}")
+    return uploaded
 
 
 def _skill_spec() -> dict:
     return {"type": "custom", "skill_id": config.SKILL_ID, "version": config.SKILL_VERSION}
 
 
-def _skill_create(client: "anthropic.Anthropic", *, messages: list[dict], container: dict):
-    """One Skills API ``messages.create`` call, with skill-aware error handling."""
+def _skill_create(client, *, messages: list[dict], container: dict):
+    """One Skills API call using streaming to support long-running operations.
+
+    Doc generation can exceed the 10-minute non-streaming ceiling, so each call is
+    made with ``messages.stream`` and resolved via ``get_final_message`` — the
+    pause_turn loop in ``_drive_to_completion`` is unchanged (streaming is
+    per-call). Skill-aware error handling is preserved.
+    """
     try:
-        return client.beta.messages.create(
+        with client.beta.messages.stream(
             model=_resolve_model(),
             max_tokens=config.REPORT_MAX_TOKENS,
             betas=BETAS,
             container=container,
             tools=[CODE_EXECUTION_TOOL],
             messages=messages,
-        )
+        ) as stream:
+            response = stream.get_final_message()
+        return response
     except anthropic.BadRequestError as exc:
         if "skill" in str(exc).lower():
             logger.error("Skill call rejected — check SKILL_ID/SKILL_VERSION (%s): %s",
@@ -110,7 +128,8 @@ def _skill_create(client: "anthropic.Anthropic", *, messages: list[dict], contai
             logger.error("Bad request to the messages API: %s", exc)
         raise
     except anthropic.APIError as exc:
-        logger.error("Anthropic API error (status=%s): %s", getattr(exc, "status_code", None), exc)
+        logger.error("Anthropic API error (status=%s): %s",
+                     getattr(exc, "status_code", None), exc)
         raise
 
 
@@ -161,14 +180,17 @@ def _download_docx(client, response, output_path: Path) -> None:
                 output_path, output_path.stat().st_size, filename)
 
 
-def _cleanup_upload(client, file_id: str) -> None:
-    """Best-effort delete of the uploaded zip; a failure must not block the run."""
-    try:
-        client.beta.files.delete(file_id=file_id)
-        logger.info("Deleted uploaded package zip %s from the Files API.", file_id)
-    except Exception as exc:  # cleanup is optional — never raise from here
-        logger.warning("Could not delete uploaded zip %s (%s) — leaving it; run unaffected.",
-                       file_id, exc)
+def _cleanup_uploads(client, uploads: list[tuple[str, str]]) -> None:
+    """Best-effort delete of all uploaded files; failures must not block the run."""
+    for filename, file_id in uploads:
+        try:
+            client.beta.files.delete(file_id=file_id)
+            logger.debug("Deleted uploaded file %s (%s).", filename, file_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not delete uploaded file %s (%s): %s — leaving it; run unaffected.",
+                filename, file_id, exc,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,11 +199,12 @@ def _cleanup_upload(client, file_id: str) -> None:
 def generate_report(package_dir: Path, output_dir: Path = config.OUTPUT_REPORTS) -> Path:
     """Run the report skill on ``package_dir`` and return the downloaded ``.docx`` path.
 
-    Zips + uploads the package, invokes the skill by ``skill_id``, follows the
-    ``pause_turn`` loop while the container builds the report, downloads the
-    branded ``.docx`` to ``output_dir/G128_TikTok_PM_Report_{YYYY-MM}.docx``, and
-    cleans up the uploaded zip. Raises ``RuntimeError`` on missing credentials or
-    when the skill returns no ``.docx``; re-raises Anthropic API errors.
+    Uploads each package file, invokes the skill by ``skill_id`` with one document
+    block per file, follows the ``pause_turn`` loop while the container builds the
+    report, downloads the branded ``.docx`` to
+    ``output_dir/G128_TikTok_PM_Report_{YYYY-MM}.docx``, and cleans up the uploaded
+    files. Raises ``RuntimeError`` on missing credentials or when the skill returns
+    no ``.docx``; re-raises Anthropic API errors.
     """
     _require_credentials()  # fail fast, before any network call
     period = _read_period(package_dir)
@@ -189,56 +212,49 @@ def generate_report(package_dir: Path, output_dir: Path = config.OUTPUT_REPORTS)
 
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    # Step 1 — zip + upload the package.
-    zip_bytes = _zip_package(package_dir)
-    uploaded = client.beta.files.upload(
-        file=("package.zip", zip_bytes, "application/zip"),
-        extra_headers=FILES_BETA_HEADER,
-    )
-    logger.info("Uploaded package zip: file_id=%s (%d bytes) for %s.",
-                uploaded.id, len(zip_bytes), period)
+    # Step 1 — upload each package file individually (zip not supported by document blocks)
+    uploads = _upload_package_files(client, package_dir)
+    logger.info("Uploaded %d package file(s) for %s.", len(uploads), period)
 
     try:
-        # Step 2 — initial skill call.
-        messages: list[dict] = [
+        # Step 2 — build message with one document block per file + trigger text
+        content_blocks = [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "file",
-                            "file_id": uploaded.id,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": _TRIGGER_MESSAGE.format(schema=config.PACKAGE_SCHEMA_VERSION),
-                    },
-                ],
+                "type": "document",
+                "source": {"type": "file", "file_id": file_id},
+                "title": filename,
             }
+            for filename, file_id in uploads
         ]
+        content_blocks.append({
+            "type": "text",
+            "text": _TRIGGER_MESSAGE.format(schema=config.PACKAGE_SCHEMA_VERSION),
+        })
+        messages: list[dict] = [{"role": "user", "content": content_blocks}]
+
         logger.info("Invoking skill %s (version %s), model=%s.",
                     config.SKILL_ID, config.SKILL_VERSION, _resolve_model())
-        response = _skill_create(client, messages=messages, container={"skills": [_skill_spec()]})
+        response = _skill_create(
+            client, messages=messages, container={"skills": [_skill_spec()]}
+        )
 
-        # Step 3 — drive the pause_turn continuation loop.
+        # Step 3 — drive the pause_turn continuation loop
         response = _drive_to_completion(client, response, messages)
 
-        # Temporary debug — remove after diagnosis
-        import json
+        # Debug logging — remove after diagnosis
         for i, item in enumerate(response.content):
-            logger.debug(f"response.content[{i}]: type={item.type}")
-            if hasattr(item, 'text'):
-                logger.debug(f"  text={item.text[:500]}")
-            if item.type == "bash_code_execution_tool_result":
-                logger.debug(f"  tool_result={str(item)[:500]}")
+            logger.debug("response.content[%d]: type=%s", i, item.type)
+            if hasattr(item, "text"):
+                logger.debug("  text=%s", item.text[:500])
+            if getattr(item, "type", None) == "bash_code_execution_tool_result":
+                logger.debug("  tool_result=%s", str(item)[:500])
 
-        # Step 4 — extract file IDs and download the .docx.
+        # Step 4 — extract file IDs and download the .docx
         _download_docx(client, response, output_path)
+
     finally:
-        # Step 5 — clean up the uploaded zip regardless of outcome.
-        _cleanup_upload(client, uploaded.id)
+        # Step 5 — clean up all uploaded files regardless of outcome
+        _cleanup_uploads(client, uploads)
 
     return output_path
 
