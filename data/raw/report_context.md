@@ -5,9 +5,9 @@ This business runs on a seasonal clock (summer sells more vs. winter sells less)
 
 ## Events this period
 (promotions, launches, stock-outs, TikTok algorithm changes, affiliate campaigns)
-World Cup begins shortly
-250th U.S. anniversary
-Following the WC is the Nov. Midterms
+World Cup begins June 2026
+250th U.S. anniversary in 2026
+Following the WC is the 2026 Nov. Midterms
 ## Known data issues
 (anything unusual about this month's files)
 
@@ -16,7 +16,7 @@ Following the WC is the Nov. Midterms
 
 ## General Events
 Patriotic Yearly Dates: July 4th, Memorial Day, Veterans Day, Flag Day, Presidents Day, Labor Day --> Specifically in the U.S.
-Seasonal Items (Garden Flags): Halloween, Thanksgiving, Easter, Christmas, Valentine's Day, and all of the Patriotic Events
+Seasonal Items also Year Round (Garden Flags): Halloween, Thanksgiving, Easter, Christmas, Valentine's Day, and all of the Patriotic Events
 
 ## Unpredictable Demand Drivers
 Geopolitical Events: Wars, global events (ex. Capture of Maduro), Sanctions
