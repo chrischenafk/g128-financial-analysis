@@ -60,6 +60,12 @@ CURRENCY: str = "USD"
 CLAUDE_MODEL_DEFAULT: str = "claude-sonnet-4-6"
 CLAUDE_MAX_TOKENS: int = 8192
 
+# Token budget for the report-skill call specifically. Producing the full
+# branded .docx (load_package → charts → report.json → verify → build_doc inside
+# the skill's container) is far larger than an ordinary completion, so it gets
+# its own, higher limit while CLAUDE_MAX_TOKENS stays for any other use.
+REPORT_MAX_TOKENS: int = 16000
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-backed settings (read-only load; values come from .env / the
 # environment). Secrets are never hardcoded and never logged.
@@ -69,3 +75,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL: str | None = os.getenv("CLAUDE_MODEL")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+# Skills API: the pm-analysis-code-supplement skill that owns all report logic.
+# SKILL_ID empty-by-default so the llm layer's missing-setting check fires
+# cleanly; pin SKILL_VERSION to a specific version in production (not "latest").
+SKILL_ID: str = os.getenv("SKILL_ID", "")
+SKILL_VERSION: str = os.getenv("SKILL_VERSION", "latest")
