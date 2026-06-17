@@ -11,6 +11,10 @@ Licensing plays a part in which flags are able to be sold
 World Cup begins June 2026
 250th U.S. anniversary in 2026
 Following the WC is the 2026 Nov. Midterms
+
+## Upcoming Events
+Presidential Inauguration in Jan 2029
+
 ## Known data issues
 (anything unusual about this month's files)
 
@@ -19,7 +23,7 @@ Following the WC is the 2026 Nov. Midterms
 
 ## General Events
 Patriotic Yearly Dates: July 4th, Memorial Day, Veterans Day, Flag Day, Presidents Day, Labor Day --> Specifically in the U.S.
-Seasonal Items also Year Round (Garden Flags): Halloween, Thanksgiving, Easter, Christmas, Valentine's Day, and all of the Patriotic Events
+Seasonal Items also Year Round (Garden Flags): Halloween, Thanksgiving, Easter, Christmas, Valentine's Day, St. Patricks Day, Cinco de Mayo, Mardi Gras and all of the Patriotic Events
 
 ## Unpredictable Demand Drivers
 Geopolitical Events: Wars, global events (ex. Capture of Maduro), Sanctions
