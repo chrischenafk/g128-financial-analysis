@@ -2,6 +2,9 @@
 
 ## General things to note for the business
 This business runs on a seasonal clock (summer sells more vs. winter sells less)
+Ocean freight takes time to arrive
+China has many tariffs and the tariffs affect COGS
+Licensing plays a part in which flags are able to be sold
 
 ## Events this period
 (promotions, launches, stock-outs, TikTok algorithm changes, affiliate campaigns)
