@@ -200,17 +200,39 @@ def generate_report(package_dir: Path, output_dir: Path = config.OUTPUT_REPORTS)
 
     try:
         # Step 2 — initial skill call.
-        messages: list[dict] = [{
-            "role": "user",
-            "content": (f"<file_id>{uploaded.id}</file_id>\n\n"
-                        + _TRIGGER_MESSAGE.format(schema=config.PACKAGE_SCHEMA_VERSION)),
-        }]
+        messages: list[dict] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "file",
+                            "file_id": uploaded.id,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": _TRIGGER_MESSAGE.format(schema=config.PACKAGE_SCHEMA_VERSION),
+                    },
+                ],
+            }
+        ]
         logger.info("Invoking skill %s (version %s), model=%s.",
                     config.SKILL_ID, config.SKILL_VERSION, _resolve_model())
         response = _skill_create(client, messages=messages, container={"skills": [_skill_spec()]})
 
         # Step 3 — drive the pause_turn continuation loop.
         response = _drive_to_completion(client, response, messages)
+
+        # Temporary debug — remove after diagnosis
+        import json
+        for i, item in enumerate(response.content):
+            logger.debug(f"response.content[{i}]: type={item.type}")
+            if hasattr(item, 'text'):
+                logger.debug(f"  text={item.text[:500]}")
+            if item.type == "bash_code_execution_tool_result":
+                logger.debug(f"  tool_result={str(item)[:500]}")
 
         # Step 4 — extract file IDs and download the .docx.
         _download_docx(client, response, output_path)
