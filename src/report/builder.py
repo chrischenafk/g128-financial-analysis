@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,3 +139,70 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
 
     # Hand the skill the slimmed package.json (charts were rendered from the full one).
     return ReportInputs(package_json=slim_json, charts=charts, workdir=workdir)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-skill: inject the real charts into the downloaded .docx
+# ─────────────────────────────────────────────────────────────────────────────
+# Embedded image parts inside a .docx zip live under this prefix.
+_DOCX_MEDIA_PREFIX = "word/media/"
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+
+
+def _media_sort_key(name: str) -> tuple[int, str]:
+    """Natural order by the trailing image number (image2.png before image10.png)."""
+    base = name.rsplit("/", 1)[-1]
+    digits = "".join(c for c in base if c.isdigit())
+    return (int(digits) if digits else 0, base)
+
+
+def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
+    """Swap the real chart PNGs into the .docx in place of build_doc's placeholders.
+
+    The skill's build_doc.js can't mount the chart files, so it embeds placeholder
+    images. charts.py produced the real PNGs locally; this replaces the bytes of
+    the embedded ``word/media/image*.png`` parts (paired to ``charts`` in document
+    order) with the real ones, leaving the rest of the document untouched.
+
+    Best-effort: returns ``docx_path`` regardless; anything unexpected (no media
+    parts, a chart/media count mismatch) logs a WARNING and is skipped rather than
+    raising — a doc without injected charts beats a crashed pipeline.
+    """
+    if not charts:
+        logger.info("No charts to inject into %s.", docx_path.name)
+        return docx_path
+
+    with zipfile.ZipFile(docx_path) as zf:
+        names = zf.namelist()
+        contents = {n: zf.read(n) for n in names}
+
+    media = sorted(
+        (n for n in names
+         if n.startswith(_DOCX_MEDIA_PREFIX) and n.lower().endswith(_IMAGE_SUFFIXES)),
+        key=_media_sort_key,
+    )
+    logger.info("docx contains media: %s", [m.rsplit("/", 1)[-1] for m in media])
+
+    if not media:
+        logger.warning("No image parts in %s — nothing to inject (build_doc may have "
+                       "omitted the chart images).", docx_path.name)
+        return docx_path
+
+    pairs = min(len(charts), len(media))
+    if len(charts) != len(media):
+        logger.warning("Chart/media mismatch in %s: %d real chart(s) vs %d embedded image(s) "
+                       "— injecting the first %d in order.",
+                       docx_path.name, len(charts), len(media), pairs)
+
+    for chart, target in zip(charts[:pairs], media[:pairs]):
+        data = chart.read_bytes()
+        contents[target] = data
+        logger.info("Injected %s → %s (%d bytes)", chart.name, target, len(data))
+
+    # Zip entries can't be edited in place — rewrite (preserving order), then swap.
+    tmp = docx_path.with_name(docx_path.name + ".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in names:
+            zf.writestr(name, contents[name])
+    tmp.replace(docx_path)
+    return docx_path

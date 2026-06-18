@@ -64,7 +64,7 @@ CLAUDE_MAX_TOKENS: int = 8192
 # branded .docx (report.json → verify → build_doc inside the skill's container)
 # from a large package.json needs a high output ceiling, so it gets its own
 # limit while CLAUDE_MAX_TOKENS stays for any other use.
-REPORT_MAX_TOKENS: int = 32000
+REPORT_MAX_TOKENS: int = 20000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-backed settings (read-only load; values come from .env / the
