@@ -86,7 +86,9 @@ def wired(tmp_path, monkeypatch):
 
     # Package + report
     attach("write_package", MagicMock(return_value=tmp_path / "pkg" / "TikTok_2026-04"))
-    attach("generate_report", MagicMock(return_value=tmp_path / "report.md"))
+    attach("prepare_report_inputs", MagicMock(return_value=SimpleNamespace(
+        package_json=tmp_path / "pkg" / "package.json", charts=[], workdir=tmp_path / "pkg")))
+    attach("generate_report", MagicMock(return_value=tmp_path / "report.docx"))
 
     return SimpleNamespace(mgr=mgr, tmp=tmp_path)
 
@@ -110,7 +112,7 @@ def test_happy_path_both_lenses_runs_in_order(wired) -> None:
     order = _names_in_order(wired.mgr)
     expected = ["scan_raw_files", "load_workbook", "normalize_workbook", "compute_sku_metrics",
                 "compare", "detect_anomalies", "build_data_quality_report", "record_period",
-                "write_package", "generate_report"]
+                "write_package", "prepare_report_inputs", "generate_report"]
     assert _is_subsequence(expected, order), order
 
     # Manifest written with a complete entry, and no .tmp left behind.

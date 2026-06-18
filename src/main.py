@@ -40,6 +40,7 @@ from src.ingest.file_scanner import scan_raw_files
 from src.ingest.period_parser import Period, parse_and_validate
 from src.llm.claude_client import generate_report
 from src.package.writer import PackageInputs, write_package
+from src.report.builder import prepare_report_inputs
 from src.transform.historical_index import init_db, record_period
 from src.transform.normalize_tiktok import (
     GROSS_COLUMN,
@@ -292,8 +293,19 @@ def _run(args: argparse.Namespace) -> int:
     )
     package_dir = write_package(inputs, config.OUTPUT_PACKAGES)  # raises if channel_metrics missing
 
+    # ── Step 10b: run load_package + charts locally (graceful fallback) ───────
+    # Hands the skill a processed package.json + chart PNGs. If this fails, fall
+    # back to the raw-file upload path — lower quality, but the run still produces
+    # a report rather than crashing.
+    try:
+        report_inputs = prepare_report_inputs(package_dir)
+    except Exception as exc:
+        logger.warning("Local report pre-processing failed (%s) — falling back to raw "
+                       "package upload; report quality may be lower.", exc)
+        report_inputs = None
+
     # ── Step 11: Claude report (external skill) ──────────────────────────────
-    report_path = generate_report(package_dir)
+    report_path = generate_report(package_dir, report_inputs=report_inputs)
 
     # ── Step 12: update manifest (atomic) ────────────────────────────────────
     manifest[period_key] = {

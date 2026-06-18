@@ -22,11 +22,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import anthropic
 
 from src import config
 from src.utils.logger import get_logger
+
+if TYPE_CHECKING:  # for the type hint only — avoids a runtime llm→report dependency
+    from src.report.builder import ReportInputs
 
 logger = get_logger(__name__)
 
@@ -47,6 +51,21 @@ _TRIGGER_MESSAGE = (
     "and produce the branded G128_TikTok_PM_Report_.docx. "
     "The package is the source of truth — do not recompute any metric."
 )
+
+# Used when load_package.py + charts.py have already run locally (the preferred
+# path): the skill receives the processed package.json and starts at Step 4.
+_TRIGGER_MESSAGE_PROCESSED = (
+    "The attached package.json is the pre-processed analysis package produced by load_package.py "
+    "(schema version {schema}). Run the report workflow from Step 4 onward as specified in SKILL.md "
+    "(report.json → verify → build_doc) — load_package.py has already been run locally.\n"
+    "{chart_note}\n"
+    "The package is the source of truth — do not recompute any metric."
+)
+_CHART_NOTE_PRESENT = (
+    "The attached chart image(s) are the pre-generated bridge/trend PNGs — "
+    "reference them in the report sections by their filename."
+)
+_CHART_NOTE_ABSENT = "No charts were generated for this package."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,25 +94,44 @@ def _read_period(package_dir: Path) -> str:
     return str(meta["current_period"]["start"])[:7]  # "2026-04-01" → "2026-04"
 
 
-def _upload_package_files(
-    client: "anthropic.Anthropic", package_dir: Path
-) -> list[tuple[str, str]]:
-    """Upload each package file individually. Returns list of (filename, file_id)."""
-    # Ordered so the skill sees the most important files first
-    INCLUDE_EXTENSIONS = {".json", ".csv", ".md"}
-    uploaded = []
-    for path in sorted(package_dir.iterdir()):
-        if path.is_file() and path.suffix.lower() in INCLUDE_EXTENSIONS:
-            content = path.read_bytes()
-            media_type = "text/plain"  # API accepts only PDF and plaintext; all our files are text
-            result = client.beta.files.upload(
-                file=(path.name, content, media_type),
-                extra_headers=FILES_BETA_HEADER,
-            )
-            uploaded.append((path.name, result.id))
-            logger.info("Uploaded %s → file_id=%s (%d bytes).", path.name, result.id, len(content))
+def _upload_package_files(client, source: Path) -> list[tuple[str, str]]:
+    """Upload package file(s) as plaintext. Returns list of (filename, file_id).
+
+    ``source`` may be a directory (uploads each .json/.csv/.md file — the raw
+    fallback path) or a single file (uploads just that one — e.g. the processed
+    ``package.json``).
+    """
+    if source.is_file():
+        targets = [source]
+    else:
+        INCLUDE_EXTENSIONS = {".json", ".csv", ".md"}  # ordered: skill sees JSON first
+        targets = [p for p in sorted(source.iterdir())
+                   if p.is_file() and p.suffix.lower() in INCLUDE_EXTENSIONS]
+    uploaded: list[tuple[str, str]] = []
+    for path in targets:
+        content = path.read_bytes()
+        result = client.beta.files.upload(
+            file=(path.name, content, "text/plain"),  # API accepts plaintext; our files are text
+            extra_headers=FILES_BETA_HEADER,
+        )
+        uploaded.append((path.name, result.id))
+        logger.info("Uploaded %s → file_id=%s (%d bytes).", path.name, result.id, len(content))
     if not uploaded:
-        raise RuntimeError(f"No uploadable files found in package dir: {package_dir}")
+        raise RuntimeError(f"No uploadable files found: {source}")
+    return uploaded
+
+
+def _upload_charts(client, charts: list[Path]) -> list[tuple[str, str]]:
+    """Upload chart PNGs (consumed as image inputs). Returns list of (filename, file_id)."""
+    uploaded: list[tuple[str, str]] = []
+    for png in charts:
+        content = png.read_bytes()
+        result = client.beta.files.upload(
+            file=(png.name, content, "image/png"),
+            extra_headers=FILES_BETA_HEADER,
+        )
+        uploaded.append((png.name, result.id))
+        logger.info("Uploaded chart %s → file_id=%s (%d bytes).", png.name, result.id, len(content))
     return uploaded
 
 
@@ -196,15 +234,23 @@ def _cleanup_uploads(client, uploads: list[tuple[str, str]]) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
-def generate_report(package_dir: Path, output_dir: Path = config.OUTPUT_REPORTS) -> Path:
-    """Run the report skill on ``package_dir`` and return the downloaded ``.docx`` path.
+def generate_report(
+    package_dir: Path,
+    report_inputs: "ReportInputs | None" = None,
+    output_dir: Path = config.OUTPUT_REPORTS,
+) -> Path:
+    """Run the report skill and return the downloaded ``.docx`` path.
 
-    Uploads each package file, invokes the skill by ``skill_id`` with one document
-    block per file, follows the ``pause_turn`` loop while the container builds the
-    report, downloads the branded ``.docx`` to
-    ``output_dir/G128_TikTok_PM_Report_{YYYY-MM}.docx``, and cleans up the uploaded
-    files. Raises ``RuntimeError`` on missing credentials or when the skill returns
-    no ``.docx``; re-raises Anthropic API errors.
+    Preferred path (``report_inputs`` provided): upload the locally pre-processed
+    ``package.json`` as a document block plus each chart PNG as an image block, and
+    tell the skill to start from Step 4 (load_package already ran locally).
+    Fallback path (``report_inputs`` is ``None``): upload the raw package files and
+    run the full workflow — preserved for tests and dry runs.
+
+    Invokes the skill by ``skill_id``, follows the ``pause_turn`` loop, downloads
+    the branded ``.docx`` to ``output_dir/G128_TikTok_PM_Report_{YYYY-MM}.docx``,
+    and cleans up all uploads. Raises ``RuntimeError`` on missing credentials or
+    when the skill returns no ``.docx``; re-raises Anthropic API errors.
     """
     _require_credentials()  # fail fast, before any network call
     period = _read_period(package_dir)
@@ -212,26 +258,42 @@ def generate_report(package_dir: Path, output_dir: Path = config.OUTPUT_REPORTS)
 
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    # Step 1 — upload each package file individually (zip not supported by document blocks)
-    uploads = _upload_package_files(client, package_dir)
-    logger.info("Uploaded %d package file(s) for %s.", len(uploads), period)
-
-    try:
-        # Step 2 — build message with one document block per file + trigger text
+    # Step 1 — upload inputs and build the user message content blocks.
+    if report_inputs is not None:
+        doc_uploads = _upload_package_files(client, report_inputs.package_json)   # single package.json
+        chart_uploads = _upload_charts(client, report_inputs.charts)              # image blocks
+        uploads = doc_uploads + chart_uploads
+        logger.info("Uploaded package.json + %d chart(s) for %s.", len(chart_uploads), period)
+        content_blocks: list[dict] = [
+            {"type": "document", "source": {"type": "file", "file_id": fid}, "title": name}
+            for name, fid in doc_uploads
+        ]
+        for name, fid in chart_uploads:
+            # Label each image so the skill can name it (charts/<file>) in report.json
+            # → build_doc.js then resolves the section's chart path.
+            content_blocks.append({"type": "text", "text": f"Chart: {name}"})
+            content_blocks.append({"type": "image", "source": {"type": "file", "file_id": fid}})
+        chart_note = _CHART_NOTE_PRESENT if report_inputs.charts else _CHART_NOTE_ABSENT
+        content_blocks.append({
+            "type": "text",
+            "text": _TRIGGER_MESSAGE_PROCESSED.format(
+                schema=config.PACKAGE_SCHEMA_VERSION, chart_note=chart_note),
+        })
+    else:
+        uploads = _upload_package_files(client, package_dir)  # raw files (backward compatible)
+        logger.info("Uploaded %d package file(s) for %s.", len(uploads), period)
         content_blocks = [
-            {
-                "type": "document",
-                "source": {"type": "file", "file_id": file_id},
-                "title": filename,
-            }
-            for filename, file_id in uploads
+            {"type": "document", "source": {"type": "file", "file_id": fid}, "title": name}
+            for name, fid in uploads
         ]
         content_blocks.append({
             "type": "text",
             "text": _TRIGGER_MESSAGE.format(schema=config.PACKAGE_SCHEMA_VERSION),
         })
-        messages: list[dict] = [{"role": "user", "content": content_blocks}]
 
+    try:
+        # Step 2 — invoke the skill.
+        messages: list[dict] = [{"role": "user", "content": content_blocks}]
         logger.info("Invoking skill %s (version %s), model=%s.",
                     config.SKILL_ID, config.SKILL_VERSION, _resolve_model())
         response = _skill_create(
