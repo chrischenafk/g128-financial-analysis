@@ -58,6 +58,9 @@ _TRIGGER_MESSAGE_PROCESSED = (
     "The attached package.json is the pre-processed analysis package produced by load_package.py "
     "(schema version {schema}). Run the report workflow from Step 4 onward as specified in SKILL.md "
     "(report.json → verify → build_doc) — load_package.py has already been run locally.\n"
+    "Note: comparisons.mom/yoy and sku_current raw arrays have been removed to reduce size — "
+    "use ranked.mom_winners, ranked.mom_losers, ranked.yoy_winners, ranked.yoy_losers, "
+    "ranked.top_profit_current, and ranked.structural_movers for all SKU analysis.\n"
     "{chart_note}\n"
     "The package is the source of truth — do not recompute any metric."
 )
@@ -303,13 +306,13 @@ def generate_report(
         # Step 3 — drive the pause_turn continuation loop
         response = _drive_to_completion(client, response, messages)
 
-        # Debug logging — remove after diagnosis
+        # Temporary debug — remove after diagnosis
         for i, item in enumerate(response.content):
             logger.debug("response.content[%d]: type=%s", i, item.type)
             if hasattr(item, "text"):
-                logger.debug("  text=%s", item.text[:500])
+                logger.debug("  text=%s", item.text[:300])
             if getattr(item, "type", None) == "bash_code_execution_tool_result":
-                logger.debug("  tool_result=%s", str(item)[:500])
+                logger.debug("  tool_result=%s", str(item)[:400])
 
         # Step 4 — extract file IDs and download the .docx
         _download_docx(client, response, output_path)

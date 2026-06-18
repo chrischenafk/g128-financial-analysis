@@ -68,8 +68,10 @@ def test_happy_path_returns_package_json_and_charts(tmp_path, monkeypatch, repor
 
     workdir = reports_dir / ".build" / "2026-04"
     assert ri.workdir == workdir
-    assert ri.package_json == workdir / "package.json"
+    # The uploaded package is the slimmed copy (raw arrays stripped).
+    assert ri.package_json == workdir / "package_slim.json"
     assert ri.package_json.exists()
+    assert (workdir / "package.json").exists()  # the full one still on disk (charts read it)
     assert ri.charts == [workdir / "charts" / "bridge_mom.png",
                          workdir / "charts" / "bridge_yoy.png"]
 
@@ -108,3 +110,28 @@ def test_only_existing_charts_are_collected(tmp_path, monkeypatch, reports_dir) 
     ri = builder.prepare_report_inputs(pkg)
     workdir = reports_dir / ".build" / "2026-04"
     assert ri.charts == [workdir / "charts" / "bridge_mom.png"]  # trend/yoy absent → excluded
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Slimming
+# ─────────────────────────────────────────────────────────────────────────────
+def test_slim_drops_bulky_arrays_keeps_summaries(tmp_path) -> None:
+    full = tmp_path / "package.json"
+    full.write_text(json.dumps({
+        "sku_current": [{"sku": f"FG-{i}", "x": i} for i in range(211)],
+        "known_dq_codes": {"unsettled_payouts": "..."},
+        "supported_schema_versions": ["1.0.0"],
+        "comparisons": {"mom": list(range(384)), "yoy": list(range(384))},
+        "ranked": {"mom_winners": [1, 2, 3]},
+        "channel": {"current": {}},
+    }), encoding="utf-8")
+
+    slim_path = builder._slim_package(full, tmp_path)
+    data = json.loads(slim_path.read_text(encoding="utf-8"))
+
+    assert slim_path == tmp_path / "package_slim.json"
+    # dropped — the skill uses ranked{} subsets instead of these raw arrays
+    for k in ("sku_current", "known_dq_codes", "supported_schema_versions", "comparisons"):
+        assert k not in data
+    assert {"ranked", "channel"} <= set(data)              # kept
+    assert slim_path.stat().st_size < full.stat().st_size

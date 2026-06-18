@@ -56,6 +56,41 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+def _slim_package(package_json: Path, workdir: Path) -> Path:
+    """Strip bulk raw arrays from package.json, keeping only what the skill
+    needs for report writing. Returns path to the slimmed file.
+
+    Removed (skill uses ranked{} subsets instead):
+      - comparisons.mom / comparisons.yoy  — full 384-row arrays
+      - sku_current                         — full 211-row array
+      - known_dq_codes                      — static dict baked into the skill
+      - supported_schema_versions           — housekeeping only
+
+    Kept:
+      - meta, channel (with bridges), anomalies, pipeline_warnings,
+        loader_flags, context_md, ranked, historical, present, schema_version
+    """
+    pkg = json.loads(package_json.read_text(encoding="utf-8"))
+
+    pkg.pop("sku_current", None)
+    pkg.pop("known_dq_codes", None)
+    pkg.pop("supported_schema_versions", None)
+    # Keep ranked{} (pre-sorted top-N subsets) but drop the full comparison arrays
+    # since ranked already contains the material movers the skill cites
+    pkg.pop("comparisons", None)
+
+    slim_path = workdir / "package_slim.json"
+    slim_path.write_text(json.dumps(pkg), encoding="utf-8")  # no indent — saves ~20% vs indent=1
+
+    size_before = package_json.stat().st_size
+    size_after = slim_path.stat().st_size
+    logger.info(
+        "Slimmed package.json: %d KB → %d KB (removed raw SKU/comparison arrays).",
+        size_before // 1024, size_after // 1024,
+    )
+    return slim_path
+
+
 def prepare_report_inputs(package_dir: Path) -> ReportInputs:
     """Run load_package.py (fatal) then charts.py (best-effort) for ``package_dir``.
 
@@ -80,6 +115,10 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
     if result.stdout.strip():
         logger.info("load_package.py: %s", result.stdout.strip())
 
+    # Step 1b — slim package.json for upload (drop bulky raw arrays). Charts still
+    # read the full package.json below; only the uploaded copy is slimmed.
+    slim_json = _slim_package(package_json, workdir)
+
     # Step 2 — charts.py (best-effort: a failure must not block the report).
     charts: list[Path] = []
     chart_result = _run([
@@ -97,4 +136,5 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
                   if (charts_dir / f"{kind}.png").exists()]
         logger.info("charts.py produced %d chart(s): %s", len(charts), [p.name for p in charts])
 
-    return ReportInputs(package_json=package_json, charts=charts, workdir=workdir)
+    # Hand the skill the slimmed package.json (charts were rendered from the full one).
+    return ReportInputs(package_json=slim_json, charts=charts, workdir=workdir)
