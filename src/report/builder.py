@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -144,65 +143,71 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
 # ─────────────────────────────────────────────────────────────────────────────
 # Post-skill: inject the real charts into the downloaded .docx
 # ─────────────────────────────────────────────────────────────────────────────
-# Embedded image parts inside a .docx zip live under this prefix.
-_DOCX_MEDIA_PREFIX = "word/media/"
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
-
-
-def _media_sort_key(name: str) -> tuple[int, str]:
-    """Natural order by the trailing image number (image2.png before image10.png)."""
-    base = name.rsplit("/", 1)[-1]
-    digits = "".join(c for c in base if c.isdigit())
-    return (int(digits) if digits else 0, base)
-
-
 def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
-    """Swap the real chart PNGs into the .docx in place of build_doc's placeholders.
+    """Insert the real chart PNGs before their anchor paragraphs in the .docx.
 
-    The skill's build_doc.js can't mount the chart files, so it embeds placeholder
-    images. charts.py produced the real PNGs locally; this replaces the bytes of
-    the embedded ``word/media/image*.png`` parts (paired to ``charts`` in document
-    order) with the real ones, leaving the rest of the document untouched.
+    build_doc.js skips the chart images (the files aren't in its container), so the
+    document has no embedded images to swap — instead each section carries a text
+    anchor naming its chart (e.g. a paragraph containing "bridge_mom.png"). This
+    inserts an image paragraph immediately before each matching anchor, using the
+    locally-rendered PNG.
 
-    Best-effort: returns ``docx_path`` regardless; anything unexpected (no media
-    parts, a chart/media count mismatch) logs a WARNING and is skipped rather than
-    raising — a doc without injected charts beats a crashed pipeline.
+    Best-effort: returns ``docx_path`` regardless; if no anchors are found it logs a
+    WARNING and skips. python-docx is imported lazily, so a missing install (or any
+    failure, via main.py's try/except) degrades to "no charts" rather than breaking
+    the run.
     """
     if not charts:
-        logger.info("No charts to inject into %s.", docx_path.name)
         return docx_path
 
-    with zipfile.ZipFile(docx_path) as zf:
-        names = zf.namelist()
-        contents = {n: zf.read(n) for n in names}
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches
 
-    media = sorted(
-        (n for n in names
-         if n.startswith(_DOCX_MEDIA_PREFIX) and n.lower().endswith(_IMAGE_SUFFIXES)),
-        key=_media_sort_key,
+    # filename stem → the anchor text to search for in paragraph text
+    ANCHORS = {
+        "bridge_mom": "bridge_mom.png",
+        "bridge_yoy": "bridge_yoy.png",
+    }
+
+    doc = Document(str(docx_path))
+
+    # Build a lookup: chart stem -> paragraph index of its anchor.
+    anchor_map: dict[str, int] = {}
+    for i, para in enumerate(doc.paragraphs):
+        for stem, anchor_text in ANCHORS.items():
+            if anchor_text in para.text:
+                anchor_map[stem] = i
+                break
+
+    if not anchor_map:
+        logger.warning("_inject_charts: no anchor paragraphs found in %s — skipping.", docx_path.name)
+        return docx_path
+
+    chart_map = {p.stem: p for p in charts}
+    # Insert in reverse index order so earlier insertions don't shift later indices.
+    insertions = sorted(
+        [(anchor_map[stem], chart_map[stem]) for stem in anchor_map if stem in chart_map],
+        key=lambda x: x[0], reverse=True,
     )
-    logger.info("docx contains media: %s", [m.rsplit("/", 1)[-1] for m in media])
 
-    if not media:
-        logger.warning("No image parts in %s — nothing to inject (build_doc may have "
-                       "omitted the chart images).", docx_path.name)
-        return docx_path
+    for para_idx, chart_path in insertions:
+        anchor_para = doc.paragraphs[para_idx]
+        # Insert a fresh, center-aligned paragraph before the anchor to hold the image.
+        new_para = OxmlElement("w:p")
+        pPr = OxmlElement("w:pPr")
+        jc = OxmlElement("w:jc")
+        jc.set(qn("w:val"), "center")
+        pPr.append(jc)
+        new_para.append(pPr)
+        anchor_para._element.addprevious(new_para)
 
-    pairs = min(len(charts), len(media))
-    if len(charts) != len(media):
-        logger.warning("Chart/media mismatch in %s: %d real chart(s) vs %d embedded image(s) "
-                       "— injecting the first %d in order.",
-                       docx_path.name, len(charts), len(media), pairs)
+        img_para = doc.paragraphs[para_idx]  # the new empty paragraph
+        run = img_para.add_run()
+        run.add_picture(str(chart_path), width=Inches(6.0))
+        logger.info("Injected %s before paragraph %d.", chart_path.name, para_idx)
 
-    for chart, target in zip(charts[:pairs], media[:pairs]):
-        data = chart.read_bytes()
-        contents[target] = data
-        logger.info("Injected %s → %s (%d bytes)", chart.name, target, len(data))
-
-    # Zip entries can't be edited in place — rewrite (preserving order), then swap.
-    tmp = docx_path.with_name(docx_path.name + ".tmp")
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in names:
-            zf.writestr(name, contents[name])
-    tmp.replace(docx_path)
+    doc.save(str(docx_path))
+    logger.info("Chart injection complete: %s", docx_path.name)
     return docx_path

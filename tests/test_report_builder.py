@@ -9,7 +9,6 @@ collecting only the chart PNGs that actually exist.
 from __future__ import annotations
 
 import json
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -139,57 +138,11 @@ def test_slim_drops_bulky_arrays_keeps_summaries(tmp_path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Chart injection (zip media swap)
+# Chart injection
 # ─────────────────────────────────────────────────────────────────────────────
-def _docx_with_media(path: Path, media: dict[str, bytes]) -> None:
-    """Write a minimal .docx-shaped zip with the given word/media/* entries."""
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("[Content_Types].xml", "<Types/>")
-        zf.writestr("word/document.xml", "<w:document/>")
-        for name, data in media.items():
-            zf.writestr(f"word/media/{name}", data)
-
-
-def test_inject_charts_swaps_media_bytes_in_order(tmp_path) -> None:
+def test_inject_charts_empty_list_is_noop(tmp_path) -> None:
+    # With no charts the function returns the path untouched and never imports docx.
     docx = tmp_path / "report.docx"
-    _docx_with_media(docx, {"image1.png": b"PLACEHOLDER-1", "image2.png": b"PLACEHOLDER-2"})
-    cdir = tmp_path / "charts"; cdir.mkdir()
-    mom = cdir / "bridge_mom.png"; mom.write_bytes(b"REAL-MOM-WATERFALL")
-    yoy = cdir / "bridge_yoy.png"; yoy.write_bytes(b"REAL-YOY-WATERFALL")
-
-    result = builder._inject_charts(docx, [mom, yoy])
-    assert result == docx
-    with zipfile.ZipFile(docx) as zf:
-        assert zf.read("word/media/image1.png") == b"REAL-MOM-WATERFALL"  # charts[0] → image1
-        assert zf.read("word/media/image2.png") == b"REAL-YOY-WATERFALL"  # charts[1] → image2
-        assert zf.read("word/document.xml") == b"<w:document/>"           # other parts intact
-        assert "[Content_Types].xml" in zf.namelist()
-
-
-def test_inject_charts_no_media_is_noop(tmp_path) -> None:
-    docx = tmp_path / "report.docx"
-    _docx_with_media(docx, {})  # no images embedded
-    mom = tmp_path / "bridge_mom.png"; mom.write_bytes(b"REAL")
-    builder._inject_charts(docx, [mom])  # must not raise
-    with zipfile.ZipFile(docx) as zf:
-        assert "word/document.xml" in zf.namelist()
-
-
-def test_inject_charts_empty_list_leaves_doc_untouched(tmp_path) -> None:
-    docx = tmp_path / "report.docx"
-    _docx_with_media(docx, {"image1.png": b"PLACEHOLDER"})
-    builder._inject_charts(docx, [])
-    with zipfile.ZipFile(docx) as zf:
-        assert zf.read("word/media/image1.png") == b"PLACEHOLDER"  # unchanged
-
-
-def test_inject_charts_more_charts_than_media_injects_available(tmp_path) -> None:
-    docx = tmp_path / "report.docx"
-    _docx_with_media(docx, {"image1.png": b"PH-1"})  # only one slot
-    cdir = tmp_path / "charts"; cdir.mkdir()
-    mom = cdir / "bridge_mom.png"; mom.write_bytes(b"REAL-MOM")
-    yoy = cdir / "bridge_yoy.png"; yoy.write_bytes(b"REAL-YOY")
-
-    builder._inject_charts(docx, [mom, yoy])  # 2 charts, 1 media → first one wins, no raise
-    with zipfile.ZipFile(docx) as zf:
-        assert zf.read("word/media/image1.png") == b"REAL-MOM"
+    docx.write_bytes(b"unchanged")
+    assert builder._inject_charts(docx, []) == docx
+    assert docx.read_bytes() == b"unchanged"

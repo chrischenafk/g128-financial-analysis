@@ -61,6 +61,8 @@ _TRIGGER_MESSAGE_PROCESSED = (
     "Note: comparisons.mom/yoy and sku_current raw arrays have been removed to reduce size — "
     "use ranked.mom_winners, ranked.mom_losers, ranked.yoy_winners, ranked.yoy_losers, "
     "ranked.top_profit_current, and ranked.structural_movers for all SKU analysis.\n"
+    "The exec_summary.verdict field must be a single SHORT sentence (max 20 words) — "
+    "the punchy one-line read on the month. Save the detail for exec_summary.paragraphs.\n"
     "{chart_note}\n"
     "The package is the source of truth — do not recompute any metric."
 )
