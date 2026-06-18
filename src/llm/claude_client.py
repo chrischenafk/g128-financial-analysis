@@ -31,7 +31,7 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Beta features the Skills API call requires (code execution + skills + files).
-BETAS = ["code-execution-2025-08-25", "skills-2025-10-02", "files-api-2025-04-14"]
+BETAS = ["code-execution-2025-08-25", "skills-2025-10-02", "files-api-2025-04-14", "prompt-caching-2024-07-31"]
 FILES_BETA_HEADER = {"anthropic-beta": "files-api-2025-04-14"}
 CODE_EXECUTION_TOOL = {"type": "code_execution_20250825", "name": "code_execution"}
 
