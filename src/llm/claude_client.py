@@ -109,6 +109,9 @@ _TRIGGER_MESSAGE_PROCESSED = (
     "CORRECT: 'Black American Heritage flag absorbs half the ad budget at thin margin'. "
     "WRONG: 'FG-3BLAH-4P2 absorbs 49% of ad budget — both lenses negative'. "
     "WRONG: 'RISK FG-3BLAH-4P2 absorbs...' — never start with a tag or SKU ID.\n"
+    "Target report length: 8-10 pages equivalent. "
+    "Do not exceed 5,500 words total across all sections combined. "
+    "If a section is complete, move on — do not pad or restate.\n"
     "{chart_note}\n"
     "The package is the source of truth — do not recompute any metric."
 )
