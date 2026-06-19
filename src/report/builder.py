@@ -175,6 +175,20 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
 
     doc = Document(str(docx_path))
 
+    # Strip the skill's placeholder images before injecting the real charts.
+    # build_doc.js embeds placeholder PNGs in the body (it can't mount the chart
+    # files); left in place, our injected charts would sit *beside* them, doubling
+    # every figure. Remove only <w:drawing> elements in the document body — headers,
+    # footers, and text boxes live outside doc.element.body, so a logo or page
+    # furniture is untouched. Removing just the drawing leaves the paragraph (and
+    # any caption text) intact, so the anchor search below still matches correctly.
+    body = doc.element.body
+    drawings = body.findall(".//" + qn("w:drawing"))
+    for drawing in drawings:
+        drawing.getparent().remove(drawing)
+    logger.info("Stripped %d placeholder image(s) from body before chart injection.",
+                len(drawings))
+
     # Build a lookup: chart stem -> paragraph index of its anchor (first match wins).
     anchor_map: dict[str, int] = {}
     for i, para in enumerate(doc.paragraphs):
@@ -196,14 +210,19 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
             )
 
     chart_map = {p.stem: p for p in charts}
-    # Insert in reverse index order so earlier insertions don't shift later indices.
+    # One insertion per stem (anchor_map already enforces first-match-wins above).
+    # Insert in ASCENDING index order, tracking an offset for the index shift each
+    # insertion introduces — every inserted paragraph pushes all later anchors down
+    # by one, so the next anchor's live index is its original index + offset.
     insertions = sorted(
         [(anchor_map[stem], chart_map[stem]) for stem in anchor_map if stem in chart_map],
-        key=lambda x: x[0], reverse=True,
+        key=lambda x: x[0],
     )
 
+    offset = 0  # number of paragraphs inserted so far → shift for subsequent anchors
     for para_idx, chart_path in insertions:
-        anchor_para = doc.paragraphs[para_idx]
+        adjusted_idx = para_idx + offset
+        anchor_para = doc.paragraphs[adjusted_idx]
         # Insert a fresh, center-aligned paragraph before the anchor to hold the image.
         new_para = OxmlElement("w:p")
         pPr = OxmlElement("w:pPr")
@@ -213,10 +232,11 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
         new_para.append(pPr)
         anchor_para._element.addprevious(new_para)
 
-        img_para = doc.paragraphs[para_idx]  # the new empty paragraph
+        img_para = doc.paragraphs[adjusted_idx]  # the new empty paragraph
         run = img_para.add_run()
         run.add_picture(str(chart_path), width=Inches(6.0))
         logger.info("Injected %s before paragraph %d.", chart_path.name, para_idx)
+        offset += 1  # each insertion shifts all subsequent anchors by one
 
     doc.save(str(docx_path))
     logger.info("Chart injection complete: %s", docx_path.name)
