@@ -28,9 +28,13 @@ This is the Phase 2 successor to a manual Phase 1 workflow, where a Claude skill
 file directly and wrote the whole report itself. Phase 2 moves all calculation into versioned,
 testable code and reduces Claude to the synthesis layer.
 
+The pipeline is feature-complete: all five layers (ingest → transform → analysis → package → LLM),
+plus a local report pre-processing layer, are implemented and covered by 128 mocked tests that run
+in CI on every push and pull request.
+
 ---
 
-## How it works (intended flow)
+## How it works
 
 1. The operator drops the period's standardized TikTok workbook(s) into `data/raw/`.
 2. The pipeline scans `data/raw/`, parses reporting periods from filenames, and cross-checks them
@@ -40,12 +44,17 @@ testable code and reduces Claude to the synthesis layer.
 4. It loads, validates, cleans, and normalizes the workbook data.
 5. It computes channel-level and SKU-level metrics, MoM/YoY comparisons, historical trend context,
    anomaly flags, and data-quality warnings — all deterministically.
-6. It writes a structured **analysis package** to `output/analysis_packages/`.
-7. It calls the **external Claude skill** (via the Claude Platform API) with that package as the
-   source of truth.
-8. Claude returns the final report, which is saved to `output/reports/` with the target period in
-   the filename.
-9. `output/reports/` is never cleaned; it becomes a running archive of every period's report.
+6. It writes a structured **analysis package** to `output/analysis_packages/TikTok_{YYYY-MM}/`.
+7. It runs the skill's own pre-processing locally (`src/report/`): `load_package.py` normalizes the
+   package to a single `package.json`, and `charts.py` renders the bridge/trend PNGs. The package is
+   then slimmed for upload.
+8. It calls the **external Claude skill** (via the Claude Platform Skills API) with that package as
+   the source of truth. The skill writes and renders the branded report inside its own
+   code-execution container and returns a `.docx`.
+9. The downloaded `.docx` is saved to `output/reports/` as `G128_TikTok_PM_Report_{YYYY-MM}.docx`,
+   and the locally-rendered chart PNGs are injected into it (the container can't mount them itself).
+10. A run record is written to `data/processed/run_manifest.json` (audit trail + skip-existing guard),
+    and `output/reports/` is never cleaned — it becomes a running archive of every period's report.
 
 The target business UX: the operator adds files to `data/raw/`, and a finished report appears in
 `output/reports/`.
@@ -87,23 +96,27 @@ follow when the contract needs to change.
 g128-financial-analysis/
   README.md
   AGENTS.md
+  PROJECT_CONTEXT.md
   requirements.txt
+  conftest.py             # adds repo root to sys.path so `from src import ...` resolves in tests
   .env.example
   .gitignore
+  .github/
+    workflows/ci.yml      # runs the pytest suite on every push and pull request
 
   data/
-    raw/            # operator drops period workbooks here (gitignored; real financial data)
-    processed/      # run manifest / local history cache (gitignored)
+    raw/            # operator drops period workbooks + report_context.md (gitignored; real data)
+    processed/      # run_manifest.json + history.sqlite (gitignored)
 
   output/
-    reports/            # final reports, one per period, never cleaned (gitignored)
-    analysis_packages/  # structured packages handed to the skill (gitignored)
+    reports/            # final .docx reports, one per period, never cleaned (gitignored)
+    analysis_packages/  # versioned packages handed to the skill (gitignored)
 
   logs/                 # run logs (gitignored)
 
   src/
-    main.py
-    config.py
+    main.py             # 12-step orchestration; CLI --target-period / --force / --context
+    config.py           # all paths + constants (schema version, model, skill id, token budgets)
 
     ingest/
       file_scanner.py     # scan data/raw/, identify candidate workbooks
@@ -113,35 +126,43 @@ g128-financial-analysis/
     transform/
       normalize_tiktok.py # clean/normalize sheets into tidy DataFrames
       sku_metrics.py      # SKU-level metric computation
-      historical_index.py # local trailing-history context (Level 2)
+      historical_index.py # local SQLite trailing-history store (SQLAlchemy)
 
     analysis/
-      comparisons.py      # MoM / YoY / trailing comparisons
-      anomalies.py        # deterministic rules-based anomaly flags
-      recommendations.py  # evidence-tagged recommendation candidates
+      comparisons.py      # MoM / YoY / trailing comparisons + revenue bridges
+      anomalies.py        # deterministic rules-based anomaly flags + materiality gate
+      data_quality.py     # the four data-quality sheets → data_quality_warnings
 
     package/
       writer.py           # serialize computed results to the versioned package contract
 
-    llm/
-      claude_client.py    # external Claude skill call (stubbed first, real API later)
-      prompt_builder.py   # assemble the skill request from the package
+    report/               # run the skill's pre-processing locally, before the skill call
+      builder.py          # run load_package + charts, slim the package, inject charts into the .docx
+      engine/
+        load_package.py   # vendored from the skill — normalize the package into one package.json
+        charts.py         # vendored from the skill — render bridge/trend PNGs (matplotlib)
 
-    reports/
-      saver.py            # write/return the final report into output/reports/
+    llm/
+      claude_client.py    # external skill call via Skills API: upload, pause_turn loop, download .docx
+      prompt_builder.py   # assemble the skill request from the package
 
     utils/
       logger.py
       paths.py
 
-  tests/
-    test_period_parser.py
-    test_metrics.py
-    test_comparisons.py
+  tests/                  # 128 tests across 13 files, fully mocked (no network, no real data)
+    test_file_scanner.py      test_period_parser.py     test_excel_loader.py
+    test_normalize_tiktok.py  test_sku_metrics.py       test_historical_index.py
+    test_comparisons.py       test_anomalies.py         test_data_quality.py
+    test_writer.py            test_report_builder.py    test_llm.py
+    test_main.py
 ```
 
-This layout is a starting point and may be refined during implementation, but the modular boundaries
-(ingest / transform / analysis / package / llm) should be preserved. Avoid one monolithic script.
+The modular boundaries (ingest / transform / analysis / package / report / llm) are preserved end to
+end — no monolithic script. `src/report/` was added during implementation to run the skill's
+deterministic pre-processing (`load_package.py`, `charts.py`) locally, since the skill's file mounting
+doesn't work over the API; those two scripts are vendored verbatim from the external skill and never
+edited here.
 
 ---
 
@@ -175,7 +196,7 @@ before merging the two into one combined report.
 
 ---
 
-## Usage (planned)
+## Usage
 
 ```bash
 # process the latest available period found in data/raw/
@@ -186,25 +207,35 @@ python src/main.py --target-period 2026-04
 
 # regenerate a report that already exists
 python src/main.py --target-period 2026-04 --force
+
+# supply an operator context file (defaults to data/raw/report_context.md)
+python src/main.py --context path/to/context.md
 ```
 
-If a report already exists for the target period, the run skips it unless `--force` is given.
-If a filename is malformed or a period is ambiguous, the run stops with a clear error rather than
-guessing. If only one of the MoM/YoY files is present, the run proceeds with a warning that the
-missing lens reduces context.
+If a report already exists for the target period (manifest status `complete`), the run skips it
+unless `--force` is given. If a filename is malformed or a period is ambiguous, that file is skipped
+with a warning; if nothing parses, the run stops with a clear error rather than guessing. If only one
+of the MoM/YoY files is present, the run proceeds with a warning that the missing lens reduces
+context. The MoM-vs-YoY anchor match (current-period gross/profit must agree to the penny across both
+files) is a hard stop — a mismatch aborts the run rather than producing a meaningless comparison.
 
 ---
 
 ## Claude integration
 
-The external skill is reached through the Claude Platform API. The integration is modular and isolated
-in `src/llm/`. For MVP development the skill call can be **stubbed** so the rest of the pipeline runs
-end-to-end without an API key; the real API call is wired in afterward.
+The external `pm-analysis-code-supplement` skill is reached through the Claude Platform **Skills API**
+(`src/llm/claude_client.py`). The integration uploads the pre-processed `package.json` and chart PNGs,
+invokes the skill by `skill_id`, drives the `pause_turn` continuation loop while the skill's
+code-execution container runs its scripts, and downloads the branded `.docx`. A stub
+(`generate_report_stub`) is kept for dry runs and tests so the rest of the pipeline can run end-to-end
+without an API key.
 
-- API keys and model settings come from environment variables / `.env`. **Keys are never hardcoded
-  and never committed.**
+- API key, model, and skill settings come from environment variables / `.env`
+  (`ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, `SKILL_ID`, `SKILL_VERSION`). The real call fails fast with a
+  clear error if `ANTHROPIC_API_KEY` or `SKILL_ID` is missing. **Keys are never hardcoded and never
+  committed.**
 - The skill itself lives **outside this repository** and is deployed separately. This repo treats the
-  skill's package schema as a downstream contract to satisfy, not as code to edit.
+  skill's package schema (version `1.0.0`) as a downstream contract to satisfy, not as code to edit.
 
 ---
 
@@ -217,7 +248,16 @@ pip install -r requirements.txt
 cp .env.example .env             # then fill in values; never commit .env
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+ (the project targets 3.12; CI runs on 3.12).
+
+Run the tests:
+
+```bash
+pytest tests/ -v --tb=short
+```
+
+The suite is fully mocked — no API key, no network, and no real workbooks are needed. CI
+(`.github/workflows/ci.yml`) runs exactly this on every push and pull request.
 
 ---
 
@@ -234,8 +274,12 @@ This repository processes **real company financial data**. That data must never 
 
 ## Status
 
-Phase 2, early. The external skill and its package contract already exist. The immediate build focus
-is the ingestion layer (file scanning, period parsing, MoM/YoY pairing, anchor-match assertion),
-followed by the deterministic metrics layer, then the package writer, then the Claude integration.
+Phase 2, feature-complete. All six layers are implemented and wired end to end in `src/main.py`:
+ingest (file scanning, period parsing, MoM/YoY pairing, anchor-match assertion) → transform
+(normalize, SKU metrics, history store) → analysis (comparisons, anomalies, data quality) → package
+(versioned contract writer) → report (local pre-processing + chart rendering) → LLM (the real Skills
+API call). The April 2026 regression targets are reproduced to the penny, and 128 mocked tests run in
+CI on every push and pull request.
 
-See `AGENTS.md` for the engineering guardrails any contributor or agent must follow.
+See `AGENTS.md` for the engineering guardrails any contributor or agent must follow, and
+`PROJECT_CONTEXT.md` for the detailed layer-by-layer architecture.

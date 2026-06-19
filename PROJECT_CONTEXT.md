@@ -1,14 +1,17 @@
-# Project Context — g128-financial-analysis (paste this into Cursor first)
+# Project Context — g128-financial-analysis
 
-You are helping build a financial-reporting data pipeline. This document is your full project
-context. **Read `README.md` and `AGENTS.md` in this repo before doing anything** — `AGENTS.md` is the
+You are working on a financial-reporting data pipeline. This document is your full project context.
+**Read `README.md` and `AGENTS.md` in this repo before doing anything** — `AGENTS.md` is the
 authoritative source for engineering boundaries and overrides anything here if they ever conflict.
-This document adds the detailed architecture and the working agreement for how we'll build.
+This document adds the detailed architecture, the known facts about the data, and the working
+agreement for how we build.
 
-We are building this **file by file**. Do not scaffold the whole project at once. Each prompt I send
-will target one script. Produce that one script, explain your choices, and stop. I validate each piece
-before we move on. If you find yourself wanting to write three modules to make one work, stop and tell
-me — don't run ahead.
+> **Status: feature-complete.** All six layers below are implemented, wired end to end in
+> `src/main.py`, and covered by 128 mocked tests that run in CI. The architecture and known facts
+> here describe the repo as it now stands. The build was done **file by file** — one script at a
+> time, validated before moving on — and that remains the norm for changes: keep modules small and
+> single-purpose, and if a change starts pulling in three modules to make one work, stop and flag it
+> rather than running ahead.
 
 ---
 
@@ -63,8 +66,9 @@ external skill. This is the most important artifact in the system.
   pipeline didn't send.
 
 The authoritative schema lives with the external skill, not in this repo. This repo's job is to
-**satisfy** that contract. We have not finalized the schema yet — it will emerge as we build the
-metrics layer — but once we lock it, it's locked.
+**satisfy** that contract. The schema is now **locked at `1.0.0`** (`config.PACKAGE_SCHEMA_VERSION`);
+`src/package/writer.py` emits exactly that shape. Changing it is the coordinated, version-bumped act
+above — never a casual edit.
 
 **Source of truth:** the package is the truth. If raw Excel ever conflicts with the package, the
 package wins and the conflict is surfaced as a caveat — never silently swapped. Missing metric → stated
@@ -74,15 +78,16 @@ as a caveat, never back-filled.
 
 ## 4. Architecture — layer by layer
 
-Five layers, each with a narrow, independently testable job. Keeping them distinct is the whole
+Six layers, each with a narrow, independently testable job. Keeping them distinct is the whole
 engineering bet. The LLM never sees raw Excel; the package is the only thing crossing into Claude.
 
 ```
-data/raw/        [INGEST]          [TRANSFORM]        [ANALYSIS]         [PACKAGE]          [LLM]
-.xlsm files  →  scan + parse  →  normalize into  →  compute metrics  →  write versioned  →  Claude skill
-                + pair files      DataFrames          + comparisons       package            → report
-                + load sheets     + validate          + anomaly flags
-                                  + deduplicate       + data quality
+data/raw/      [INGEST]        [TRANSFORM]      [ANALYSIS]      [PACKAGE]       [REPORT]         [LLM]
+.xlsm files → scan + parse → normalize into → compute        → write        → load_package  → Skills API
+              + pair files    DataFrames       metrics          versioned      + render        → branded
+              + load sheets   + validate       + comparisons    package         charts (PNG)     .docx
+                              + deduplicate     + anomaly flags                  + slim package   + inject
+                                                + data quality                  (local, no net)  charts
 ```
 
 ### Layer 1 — Ingest (`src/ingest/`)
@@ -103,8 +108,9 @@ Output of ingest: raw DataFrames + confirmed period metadata. Nothing computed y
   **The regression targets (§6) must be reproducible from this layer's output alone.**
 - **`sku_metrics.py`** — normalized data → per-SKU metrics: gross, profit, margin, units, ad spend,
   profit-before-ads, break-even ROAS, segment classification.
-- **`historical_index.py`** — read/write the local SQLite history store for trailing context. Stub for
-  MVP, real for Level 2.
+- **`historical_index.py`** — read/write the local SQLite history store (SQLAlchemy) for trailing
+  context. Implemented; its update in `main.py` is failure-isolated so a history error never blocks
+  the report.
 
 ### Layer 3 — Analysis (`src/analysis/`)
 - **`comparisons.py`** — MoM/YoY deltas, revenue decomposition (volume/price/new-SKU bridge),
@@ -116,21 +122,46 @@ Output of ingest: raw DataFrames + confirmed period metadata. Nothing computed y
 
 ### Layer 4 — Package (`src/package/`)
 - **`writer.py`** — take everything analysis produced and serialize it to the exact contract. The only
-  place that knows the schema version. **Does ZERO computation — only shapes and writes.** Every field
-  name here is the contract; changing one means bumping the version and updating the external skill.
+  place that knows the schema version (`1.0.0`). **Does ZERO computation — only shapes and writes.**
+  Every field name here is the contract; changing one means bumping the version and updating the
+  external skill. Emits to `output/analysis_packages/TikTok_{YYYY-MM}/`; `channel_metrics.json` is
+  REQUIRED — the writer raises (before creating the directory) if the current channel gross/profit
+  can't be produced. It is also the single translation point from internal names to contract names.
 
-### Layer 5 — LLM (`src/llm/`)
-- **`claude_client.py`** — call the external skill via API. **Stubbed first** (writes a placeholder
-  report), real later. API key from `.env`.
+### Layer 5 — Report (`src/report/`)
+The skill's file mounting doesn't work over the API, so its own deterministic pre-processing is run
+here, locally, before the skill call — handing the skill exactly the inputs it expects.
+- **`builder.py`** — glue around the vendored scripts: runs `load_package.py` (fatal on failure) then
+  `charts.py` (best-effort), slims the uploaded `package.json` (drops bulky raw SKU/comparison arrays
+  the skill reads from `ranked{}` instead), and — after the skill returns — injects the locally
+  rendered chart PNGs into the downloaded `.docx`. Does no business computation.
+- **`engine/load_package.py`**, **`engine/charts.py`** — **vendored verbatim from the external skill**.
+  Never edited here; they are the skill's own scripts, run locally so the pipeline produces the same
+  `package.json` + charts the skill would. Treat them as third-party code.
+
+### Layer 6 — LLM (`src/llm/`)
+- **`claude_client.py`** — call the external skill via the **Skills API** (`generate_report`): upload
+  the package + chart files, invoke by `skill_id`, drive the `pause_turn` continuation loop while the
+  skill's code-execution container runs, and download the branded `.docx`. Fails fast if
+  `ANTHROPIC_API_KEY` or `SKILL_ID` is unset. `generate_report_stub` writes a placeholder report (no
+  API call) for dry runs/tests. API key and skill settings from `.env`.
 - **`prompt_builder.py`** — assemble the request from the package.
 
 ### Support
 - **`src/config.py`** — single home for all paths and settings. Everything imports from here; no magic
-  strings scattered around. Includes `PACKAGE_SCHEMA_VERSION`, `MARKETPLACE`, and all the `Path`s.
-- **`src/utils/`** — `logger.py` (logging, not print), `paths.py`.
-- **`src/main.py`** — entry point that *coordinates* the layers and does no work itself. Reads CLI args
-  (`--target-period`, `--force`), then calls each layer in order, failing loudly with a layer-specific
-  message if any step breaks.
+  strings scattered around. Includes `PACKAGE_SCHEMA_VERSION` (`1.0.0`), `MARKETPLACE`, `CURRENCY`,
+  the model/token settings (`CLAUDE_MODEL_DEFAULT`, `REPORT_MAX_TOKENS`), the env-backed secrets
+  (`ANTHROPIC_API_KEY`, `SKILL_ID`, `SKILL_VERSION`, `CLAUDE_MODEL`, `LOG_LEVEL`), and all the `Path`s.
+  Declares only — directory creation lives in `src/utils/paths.py`.
+- **`src/utils/`** — `logger.py` (logging, not print), `paths.py` (`ensure_directories()`).
+- **`src/main.py`** — entry point that *coordinates* the 12 steps and does no work itself. Reads CLI
+  args (`--target-period`, `--force`, `--context`), then calls each layer in order, failing loudly with
+  a layer-specific message if any step breaks. The VD1 anchor match and history-store-failure handling
+  live here because they need outputs from more than one layer.
+- **`conftest.py`** (repo root) — puts the repo root on `sys.path` so `from src import ...` resolves in
+  tests without an editable install.
+- **`.github/workflows/ci.yml`** — runs `pytest tests/ -v --tb=short` on Python 3.12 for every push and
+  pull request. The suite is fully mocked — no API key, no network, no real workbooks.
 
 ---
 
@@ -194,18 +225,21 @@ Starter shape (two tables): a `run_history` (one row per ingested period/file) a
 
 ---
 
-## 8. Build order (do not jump ahead)
+## 8. Build order (the sequence we followed — all complete)
 
-1. **Skeleton + ingest** — folder structure, `config.py`, `paths.py`, `file_scanner.py`,
-   `period_parser.py` with the anchor-match assertion. Prove it can find, pair, and validate the two
-   sample files. **No metrics yet.** ← we start here
-2. **Transform** — normalize, then SKU metrics. Reproduce the regression targets.
-3. **Analysis** — comparisons, anomalies, data quality.
-4. **Package** — serialize to the (now-locked) versioned contract; verify it reproduces the targets.
-5. **LLM** — stubbed skill call first, then the real Claude Platform API.
-6. **History (Level 2)** — SQLite trailing context. Don't block MVP on it.
+1. **Skeleton + ingest** — ✅ folder structure, `config.py`, `paths.py`, `file_scanner.py`,
+   `period_parser.py` with the anchor-match assertion. Finds, pairs, and validates the sample files.
+2. **Transform** — ✅ normalize, then SKU metrics. Reproduces the regression targets.
+3. **Analysis** — ✅ comparisons, anomalies, data quality.
+4. **Package** — ✅ serialize to the locked `1.0.0` versioned contract; reproduces the targets.
+5. **Report** — ✅ local `load_package` + `charts` pre-processing, package slimming, `.docx` chart
+   injection (added during implementation; not in the original plan).
+6. **LLM** — ✅ stubbed skill call first, then the real Claude Platform Skills API.
+7. **History (Level 2)** — ✅ SQLite trailing-history store (`historical_index.py`), failure-isolated
+   so a history error never blocks the report.
 
-Claude integration is **last** and stays stubbed until the package is trusted.
+Claude integration was built **last**, and stayed stubbed until the package was trusted. New work
+respects the same ordering: don't change a downstream layer to paper over an upstream gap.
 
 ---
 
@@ -234,6 +268,9 @@ Claude integration is **last** and stays stubbed until the package is trusted.
   report is not.
 - When the real data doesn't match §5, tell me — don't smooth it over.
 - Keep modules small and single-purpose. No monolithic script.
+- Every fact-producing change needs a test, and the full suite must stay green (`pytest tests/`) — CI
+  enforces this on every push and pull request.
 
-Acknowledge you've read this and `AGENTS.md`, then wait for my first build prompt (the skeleton +
-ingest layer). Don't start writing code in response to this document.
+The pipeline is built; this document is now the architecture reference for changes to it. Read it and
+`AGENTS.md` before touching the repo, keep within the boundaries above, and pause and ask whenever a
+change is genuinely ambiguous or would cross a non-negotiable.
