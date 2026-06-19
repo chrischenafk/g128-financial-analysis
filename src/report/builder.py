@@ -165,25 +165,35 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
     from docx.oxml.ns import qn
     from docx.shared import Inches
 
-    # filename stem → the anchor text to search for in paragraph text
+    # filename stem → anchor text variants to search for. The skill references the
+    # charts inconsistently (with/without ".png", or in prose like "MoM bridge"),
+    # so we match any variant rather than the literal filename alone.
     ANCHORS = {
-        "bridge_mom": "bridge_mom.png",
-        "bridge_yoy": "bridge_yoy.png",
+        "bridge_mom": ["bridge_mom.png", "bridge_mom", "MoM Profit Bridge", "MoM bridge"],
+        "bridge_yoy": ["bridge_yoy.png", "bridge_yoy", "YoY Profit Bridge", "YoY bridge"],
     }
 
     doc = Document(str(docx_path))
 
-    # Build a lookup: chart stem -> paragraph index of its anchor.
+    # Build a lookup: chart stem -> paragraph index of its anchor (first match wins).
     anchor_map: dict[str, int] = {}
     for i, para in enumerate(doc.paragraphs):
-        for stem, anchor_text in ANCHORS.items():
-            if anchor_text in para.text:
+        text = para.text
+        for stem, variants in ANCHORS.items():
+            if stem not in anchor_map and any(v in text for v in variants):
                 anchor_map[stem] = i
-                break
 
     if not anchor_map:
         logger.warning("_inject_charts: no anchor paragraphs found in %s — skipping.", docx_path.name)
         return docx_path
+
+    # Diagnose a partial match: chart rendered locally but no anchor for it in the doc.
+    for chart in charts:
+        if chart.stem in ANCHORS and chart.stem not in anchor_map:
+            logger.warning(
+                "_inject_charts: chart %s exists but no anchor found for it in %s — "
+                "it will not be injected.", chart.name, docx_path.name,
+            )
 
     chart_map = {p.stem: p for p in charts}
     # Insert in reverse index order so earlier insertions don't shift later indices.

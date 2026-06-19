@@ -65,9 +65,15 @@ def bridge_waterfall(start_label, end_label, start_val, end_val, bridge_rows, pa
     ax.set_xticks(xs); ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=7.4)
     ax.set_ylim(visible_min * 1.1, visible_max * 1.25)
     ax.yaxis.set_major_formatter(FuncFormatter(money))
-    ax.set_title(f"What moved profit: {start_label} \u2192 {end_label}", fontsize=10.5, color=INK, pad=8)
+    # FIX 2026-06-18: readability \u2014 direction context in title for waterfalls that dip negative.
+    ax.set_title(
+        f"Profit bridge: {start_label} \u2192 {end_label}  "
+        f"(\u2191 = helped profit, \u2193 = hurt profit)",
+        fontsize=9.5, color=INK, pad=8,
+    )
     for s in ("top", "right"): ax.spines[s].set_visible(False)
     ax.grid(axis="y", color=GRID, lw=0.6); ax.set_axisbelow(True)
+    ax.axhline(y=0, color=INK, linewidth=0.8, alpha=0.4, zorder=3)  # FIX 2026-06-18: readability \u2014 zero reference line
     plt.tight_layout(); plt.savefig(path, bbox_inches="tight"); plt.close()
 
 
