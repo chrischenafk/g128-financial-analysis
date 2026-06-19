@@ -56,6 +56,41 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+def _slim_package(package_json: Path, workdir: Path) -> Path:
+    """Strip bulk raw arrays from package.json, keeping only what the skill
+    needs for report writing. Returns path to the slimmed file.
+
+    Removed (skill uses ranked{} subsets instead):
+      - comparisons.mom / comparisons.yoy  — full 384-row arrays
+      - sku_current                         — full 211-row array
+      - known_dq_codes                      — static dict baked into the skill
+      - supported_schema_versions           — housekeeping only
+
+    Kept:
+      - meta, channel (with bridges), anomalies, pipeline_warnings,
+        loader_flags, context_md, ranked, historical, present, schema_version
+    """
+    pkg = json.loads(package_json.read_text(encoding="utf-8"))
+
+    pkg.pop("sku_current", None)
+    pkg.pop("known_dq_codes", None)
+    pkg.pop("supported_schema_versions", None)
+    # Keep ranked{} (pre-sorted top-N subsets) but drop the full comparison arrays
+    # since ranked already contains the material movers the skill cites
+    pkg.pop("comparisons", None)
+
+    slim_path = workdir / "package_slim.json"
+    slim_path.write_text(json.dumps(pkg), encoding="utf-8")  # no indent — saves ~20% vs indent=1
+
+    size_before = package_json.stat().st_size
+    size_after = slim_path.stat().st_size
+    logger.info(
+        "Slimmed package.json: %d KB → %d KB (removed raw SKU/comparison arrays).",
+        size_before // 1024, size_after // 1024,
+    )
+    return slim_path
+
+
 def prepare_report_inputs(package_dir: Path) -> ReportInputs:
     """Run load_package.py (fatal) then charts.py (best-effort) for ``package_dir``.
 
@@ -80,6 +115,10 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
     if result.stdout.strip():
         logger.info("load_package.py: %s", result.stdout.strip())
 
+    # Step 1b — slim package.json for upload (drop bulky raw arrays). Charts still
+    # read the full package.json below; only the uploaded copy is slimmed.
+    slim_json = _slim_package(package_json, workdir)
+
     # Step 2 — charts.py (best-effort: a failure must not block the report).
     charts: list[Path] = []
     chart_result = _run([
@@ -97,4 +136,137 @@ def prepare_report_inputs(package_dir: Path) -> ReportInputs:
                   if (charts_dir / f"{kind}.png").exists()]
         logger.info("charts.py produced %d chart(s): %s", len(charts), [p.name for p in charts])
 
-    return ReportInputs(package_json=package_json, charts=charts, workdir=workdir)
+    # Hand the skill the slimmed package.json (charts were rendered from the full one).
+    return ReportInputs(package_json=slim_json, charts=charts, workdir=workdir)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-skill: inject the real charts into the downloaded .docx
+# ─────────────────────────────────────────────────────────────────────────────
+def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
+    """Insert the real chart PNGs before their anchor paragraphs in the .docx.
+
+    build_doc.js skips the chart images (the files aren't in its container), so the
+    document has no embedded images to swap — instead each section carries a text
+    anchor naming its chart (e.g. a paragraph containing "bridge_mom.png"). This
+    inserts an image paragraph immediately before each matching anchor, using the
+    locally-rendered PNG.
+
+    Best-effort: returns ``docx_path`` regardless; if no anchors are found it logs a
+    WARNING and skips. python-docx is imported lazily, so a missing install (or any
+    failure, via main.py's try/except) degrades to "no charts" rather than breaking
+    the run.
+    """
+    if not charts:
+        return docx_path
+
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches
+
+    # filename stem → anchor text variants to search for. The skill references the
+    # charts inconsistently (with/without ".png", or in prose like "MoM bridge"),
+    # so we match any variant rather than the literal filename alone.
+    ANCHORS = {
+        "bridge_mom": ["bridge_mom.png", "bridge_mom", "MoM Profit Bridge", "MoM bridge"],
+        "bridge_yoy": ["bridge_yoy.png", "bridge_yoy", "YoY Profit Bridge", "YoY bridge"],
+    }
+
+    doc = Document(str(docx_path))
+
+    # Strip the skill's placeholder images before injecting the real charts.
+    # build_doc.js embeds placeholder PNGs in the body (it can't mount the chart
+    # files); left in place, our injected charts would sit *beside* them, doubling
+    # every figure. Remove only <w:drawing> elements in the document body — headers,
+    # footers, and text boxes live outside doc.element.body, so a logo or page
+    # furniture is untouched. Removing just the drawing leaves the paragraph (and
+    # any caption text) intact, so the anchor search below still matches correctly.
+    body = doc.element.body
+    drawings = body.findall(".//" + qn("w:drawing"))
+    for drawing in drawings:
+        drawing.getparent().remove(drawing)
+    logger.info("Stripped %d placeholder image(s) from body before chart injection.",
+                len(drawings))
+
+    # Build a lookup: chart stem -> paragraph index of its anchor (first match wins).
+    anchor_map: dict[str, int] = {}
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text
+        for stem, variants in ANCHORS.items():
+            if stem not in anchor_map and any(v in text for v in variants):
+                anchor_map[stem] = i
+
+    if not anchor_map:
+        logger.warning("_inject_charts: no anchor paragraphs found in %s — skipping.", docx_path.name)
+        return docx_path
+
+    # Positional fallback: the skill occasionally references a chart far down the
+    # document (e.g. in an appendix) rather than in its section. If an anchor lands
+    # past paragraph 80 it is almost certainly misplaced — re-anchor it to just after
+    # the relevant section heading instead. The heading strings are stable because
+    # section numbering is locked in the trigger message. If the anchor is already
+    # early (in its section), this never fires.
+    HEADING_FALLBACKS = {
+        "bridge_mom": "3. MoM Performance",
+        "bridge_yoy": "4. YoY / Seasonality Context",
+    }
+    for stem, heading_text in HEADING_FALLBACKS.items():
+        if stem in anchor_map and anchor_map[stem] > 80:
+            for i, para in enumerate(doc.paragraphs):
+                if heading_text in para.text:
+                    logger.warning(
+                        "_inject_charts: %s anchor at paragraph %d is past threshold "
+                        "(likely appendix) — falling back to heading position %d ('%s').",
+                        stem, anchor_map[stem], i, heading_text,
+                    )
+                    anchor_map[stem] = i + 1  # inject right after the heading
+                    break
+            else:
+                logger.warning(
+                    "_inject_charts: %s anchor at paragraph %d is past threshold "
+                    "(likely appendix) but heading '%s' was not found — leaving anchor "
+                    "in place. Section wording may have drifted.",
+                    stem, anchor_map[stem], heading_text,
+                )
+
+    # Diagnose a partial match: chart rendered locally but no anchor for it in the doc.
+    for chart in charts:
+        if chart.stem in ANCHORS and chart.stem not in anchor_map:
+            logger.warning(
+                "_inject_charts: chart %s exists but no anchor found for it in %s — "
+                "it will not be injected.", chart.name, docx_path.name,
+            )
+
+    chart_map = {p.stem: p for p in charts}
+    # One insertion per stem (anchor_map already enforces first-match-wins above).
+    # Insert in ASCENDING index order, tracking an offset for the index shift each
+    # insertion introduces — every inserted paragraph pushes all later anchors down
+    # by one, so the next anchor's live index is its original index + offset.
+    insertions = sorted(
+        [(anchor_map[stem], chart_map[stem]) for stem in anchor_map if stem in chart_map],
+        key=lambda x: x[0],
+    )
+
+    offset = 0  # number of paragraphs inserted so far → shift for subsequent anchors
+    for para_idx, chart_path in insertions:
+        adjusted_idx = para_idx + offset
+        anchor_para = doc.paragraphs[adjusted_idx]
+        # Insert a fresh, center-aligned paragraph before the anchor to hold the image.
+        new_para = OxmlElement("w:p")
+        pPr = OxmlElement("w:pPr")
+        jc = OxmlElement("w:jc")
+        jc.set(qn("w:val"), "center")
+        pPr.append(jc)
+        new_para.append(pPr)
+        anchor_para._element.addprevious(new_para)
+
+        img_para = doc.paragraphs[adjusted_idx]  # the new empty paragraph
+        run = img_para.add_run()
+        run.add_picture(str(chart_path), width=Inches(6.0))
+        logger.info("Injected %s before paragraph %d.", chart_path.name, para_idx)
+        offset += 1  # each insertion shifts all subsequent anchors by one
+
+    doc.save(str(docx_path))
+    logger.info("Chart injection complete: %s", docx_path.name)
+    return docx_path

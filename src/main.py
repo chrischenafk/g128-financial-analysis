@@ -40,7 +40,7 @@ from src.ingest.file_scanner import scan_raw_files
 from src.ingest.period_parser import Period, parse_and_validate
 from src.llm.claude_client import generate_report
 from src.package.writer import PackageInputs, write_package
-from src.report.builder import prepare_report_inputs
+from src.report.builder import _inject_charts, prepare_report_inputs
 from src.transform.historical_index import init_db, record_period
 from src.transform.normalize_tiktok import (
     GROSS_COLUMN,
@@ -306,6 +306,16 @@ def _run(args: argparse.Namespace) -> int:
 
     # ── Step 11: Claude report (external skill) ──────────────────────────────
     report_path = generate_report(package_dir, report_inputs=report_inputs)
+
+    # ── Step 11b: inject the real chart PNGs into the downloaded .docx ─────────
+    # The skill embeds placeholders (it can't mount the chart files); swap in the
+    # locally-rendered charts. Best-effort — a failure must not lose the report.
+    if report_inputs is not None and report_inputs.charts:
+        try:
+            _inject_charts(report_path, report_inputs.charts)
+        except Exception as exc:
+            logger.warning("Chart injection failed (%s) — keeping the report without "
+                           "injected charts.", exc)
 
     # ── Step 12: update manifest (atomic) ────────────────────────────────────
     manifest[period_key] = {

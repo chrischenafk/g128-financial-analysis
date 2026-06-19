@@ -58,6 +58,60 @@ _TRIGGER_MESSAGE_PROCESSED = (
     "The attached package.json is the pre-processed analysis package produced by load_package.py "
     "(schema version {schema}). Run the report workflow from Step 4 onward as specified in SKILL.md "
     "(report.json → verify → build_doc) — load_package.py has already been run locally.\n"
+    "Note: comparisons.mom/yoy and sku_current raw arrays have been removed to reduce size — "
+    "use ranked.mom_winners, ranked.mom_losers, ranked.yoy_winners, ranked.yoy_losers, "
+    "ranked.top_profit_current, and ranked.structural_movers for all SKU analysis.\n"
+    "The exec_summary.verdict field must be a single SHORT sentence (max 20 words) — "
+    "the punchy one-line read on the month. Save the detail for exec_summary.paragraphs.\n"
+    "WRITING STYLE — apply to every section of the report:\n"
+    "Lead with the business insight, not the data. Every paragraph should open with a plain-English "
+    "sentence a non-financial reader can act on, then support it with the specific numbers. "
+    "Never open a paragraph with a SKU ID, a raw figure, or a pipeline rule citation. "
+    "Example of WRONG style (data-first): "
+    "'FG-3BLAH-4P2 had ad_spend of $907.28 (ad_share 0.487) against profit of $306 at 7.73% margin.' "
+    "Example of RIGHT style (insight-first): "
+    "'Black American Heritage is spending nearly half the ad budget for a 7.7% return — "
+    "the clearest cost problem in the catalog this month. At $907 in ads against $306 in profit, "
+    "the math only works if those ads are buying future volume, and the YoY decline suggests they are not.' "
+    "SKU IDs belong in parentheses after the product name, never leading a sentence. "
+    "Pipeline rule citations (rule A, rule B, etc.) belong in the appendix or in parenthetical notes, "
+    "never in the body of a section. Evidence dict field names (ad_share, profit_delta_yoy, etc.) "
+    "must never appear in the report prose — translate them into plain English. "
+    "Keep sections concise. If a point is made, move on. Avoid restating the same figure "
+    "in multiple consecutive sentences. Target 2–4 sentences per paragraph, not 6–8.\n"
+    "EXECUTIVE SUMMARY — specific rules:\n"
+    "The exec_summary.paragraphs must read as if written for a business owner with 2 minutes. "
+    "No SKU IDs, no percentages, no pipeline rule references in the first paragraph. "
+    "Just the plain English story: what happened this month, why, and the one thing to watch. "
+    "Bring in specific numbers only in the second and third paragraphs, where they support "
+    "a point already made in plain language. "
+    "The scorecard tiles carry the headline numbers — the paragraphs explain what they mean, "
+    "not what they are. Do not restate the scorecard figures in the opening sentence. "
+    "Example of WRONG exec summary opening: "
+    "'April delivered $7,595 in profit at a 23.7% margin — 5 points better than March but "
+    "5.8 points below April 2025.' "
+    "Example of RIGHT exec summary opening: "
+    "'April was a normal seasonal step-down from March — smaller volume, but the business "
+    "is running more efficiently and is substantially larger than it was a year ago. "
+    "The one number to watch is margin: we are buying growth with ad and affiliate spend "
+    "that did not exist a year ago, and the strategic question is whether that spend is "
+    "building the business or just renting volume.' "
+    "The verdict sentence (exec_summary.verdict) should be the one-line read on the month "
+    "in plain language — max 15 words, no numbers, no SKU IDs.\n"
+    "Section headings in the sections[] array MUST include their section number prefix "
+    "(e.g. '2. Current Period Snapshot', '3. MoM Performance', '4. YoY / Seasonality Context', etc.). "
+    "The ONE exception: do NOT write a '11. Recommended Action Plan' section entry — "
+    "build_doc.js renders the action_plan array as its own titled block automatically, "
+    "so writing it in sections[] creates an empty duplicate. Number all other sections normally.\n"
+    "key_insights headlines MUST start with the plain English product name, never the SKU ID. "
+    "Format: '[Product name] — [one punchy observation under 10 words]'. "
+    "The SKU ID goes in parentheses after the name if needed, never at the start. "
+    "CORRECT: 'Black American Heritage flag absorbs half the ad budget at thin margin'. "
+    "WRONG: 'FG-3BLAH-4P2 absorbs 49% of ad budget — both lenses negative'. "
+    "WRONG: 'RISK FG-3BLAH-4P2 absorbs...' — never start with a tag or SKU ID.\n"
+    "Target report length: 8-10 pages equivalent. "
+    "Do not exceed 5,500 words total across all sections combined. "
+    "If a section is complete, move on — do not pad or restate.\n"
     "{chart_note}\n"
     "The package is the source of truth — do not recompute any metric."
 )
@@ -303,13 +357,13 @@ def generate_report(
         # Step 3 — drive the pause_turn continuation loop
         response = _drive_to_completion(client, response, messages)
 
-        # Debug logging — remove after diagnosis
+        # Temporary debug — remove after diagnosis
         for i, item in enumerate(response.content):
             logger.debug("response.content[%d]: type=%s", i, item.type)
             if hasattr(item, "text"):
-                logger.debug("  text=%s", item.text[:500])
+                logger.debug("  text=%s", item.text[:300])
             if getattr(item, "type", None) == "bash_code_execution_tool_result":
-                logger.debug("  tool_result=%s", str(item)[:500])
+                logger.debug("  tool_result=%s", str(item)[:400])
 
         # Step 4 — extract file IDs and download the .docx
         _download_docx(client, response, output_path)

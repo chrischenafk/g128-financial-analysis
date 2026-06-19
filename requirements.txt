@@ -29,3 +29,6 @@ pytest>=8.0            # tests for every fact-producing module
 
 # ── Report generation ────────────────────────────────────────
 matplotlib>=3.7        # charts.py: waterfall and trend PNG generation
+
+# ── Python Docx ────────────────────────────────────────
+python-docx>=1.1

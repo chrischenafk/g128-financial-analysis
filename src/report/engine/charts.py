@@ -26,34 +26,54 @@ def money(x, _):
 
 
 def bridge_waterfall(start_label, end_label, start_val, end_val, bridge_rows, path):
+    # FIX 2026-06-18: span/ylim corrected for charts where cumulative peaks above start/end or dips below zero.
     fig, ax = plt.subplots(figsize=(8.6, 4.3), dpi=130)
     gross_row = next((r for r in bridge_rows if "Gross" in (r.get("line") or "")), None)
     items = [(short(r["line"]), r["delta"]) for r in bridge_rows
              if r.get("line") and "Gross" not in r["line"] and "Profit" not in r["line"]]
     seq = ([("Gross", gross_row["delta"])] if gross_row else []) + items
     cum = start_val
+    max_cum = start_val   # FIX: track peak cumulative, not just final
+    min_cum = start_val   # FIX: track trough cumulative for negative bars
     xs = [0]; bottoms = [0]; heights = [start_val]; colors = [INK]; labels = [start_label]
     i = 1
     for name, delta in seq:
         labels.append(name)
         bottoms.append(cum if delta >= 0 else cum + delta)
         heights.append(abs(delta)); colors.append(GOOD if delta >= 0 else BAD)
-        cum += delta; xs.append(i); i += 1
+        cum += delta
+        max_cum = max(max_cum, cum)   # FIX
+        min_cum = min(min_cum, cum)   # FIX
+        xs.append(i); i += 1
     labels.append(end_label); bottoms.append(0); heights.append(end_val); colors.append(INK); xs.append(i)
     ax.bar(xs, heights, bottom=bottoms, color=colors, width=0.62, edgecolor="white", linewidth=0.6)
-    span = max(start_val, end_val, cum)
+    # FIX: cap the y-axis on the highest bar top actually rendered (not the cumulative
+    # peak, which can be a floating segment high up), so the chart stays proportional
+    # regardless of whether the cumulative goes up first or down first.
+    bar_tops = [b + h for b, h in zip(bottoms, heights)]
+    visible_max = max(bar_tops)
+    visible_min = min(0, min_cum)
+    span = visible_max   # used only for label offsets
     for x, b, h, (nm, dv) in zip(xs[1:-1], bottoms[1:-1], heights[1:-1], seq):
-        ax.text(x, b + h + span * 0.012, f"{dv:+,.0f}", ha="center", va="bottom",
+        bar_top = b + h  # top of the bar (could be negative if delta and b are negative)
+        label_y = bar_top + span * 0.015
+        ax.text(x, label_y, f"{dv:+,.0f}", ha="center", va="bottom",
                 fontsize=7.0, color=GOOD if dv >= 0 else BAD)
     for x, v in ((0, start_val), (xs[-1], end_val)):
-        ax.text(x, v + span * 0.012, f"${v:,.0f}", ha="center", va="bottom",
+        ax.text(x, v + span * 0.015, f"${v:,.0f}", ha="center", va="bottom",
                 fontsize=8, fontweight="bold", color=INK)
     ax.set_xticks(xs); ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=7.4)
-    ax.set_ylim(0, span * 1.16)
+    ax.set_ylim(visible_min * 1.1, visible_max * 1.25)
     ax.yaxis.set_major_formatter(FuncFormatter(money))
-    ax.set_title(f"What moved profit: {start_label} \u2192 {end_label}", fontsize=10.5, color=INK, pad=8)
+    # FIX 2026-06-18: readability \u2014 direction context in title for waterfalls that dip negative.
+    ax.set_title(
+        f"Profit bridge: {start_label} \u2192 {end_label}  "
+        f"(\u2191 = helped profit, \u2193 = hurt profit)",
+        fontsize=9.5, color=INK, pad=8,
+    )
     for s in ("top", "right"): ax.spines[s].set_visible(False)
     ax.grid(axis="y", color=GRID, lw=0.6); ax.set_axisbelow(True)
+    ax.axhline(y=0, color=INK, linewidth=0.8, alpha=0.4, zorder=3)  # FIX 2026-06-18: readability \u2014 zero reference line
     plt.tight_layout(); plt.savefig(path, bbox_inches="tight"); plt.close()
 
 
