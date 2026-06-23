@@ -290,6 +290,12 @@ def _run(args: argparse.Namespace) -> int:
         data_quality_report=dq_report,
         sku_historical_trends=None,
         report_context_path=context_path,
+        # Original workbook filename(s) for the cover's "Source:" line — joined with
+        # " + " when both an MoM and a YoY workbook fed the run. path.name drops the
+        # (gitignored) data/raw/ directory, leaving just the meaningful filename.
+        source_file=" + ".join(
+            fp.path.name for fp in (mom_fp, yoy_fp) if fp is not None
+        ) or None,
     )
     package_dir = write_package(inputs, config.OUTPUT_PACKAGES)  # raises if channel_metrics missing
 

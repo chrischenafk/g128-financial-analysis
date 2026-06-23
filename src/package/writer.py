@@ -148,6 +148,11 @@ class PackageInputs:
     # Optional operator context file to copy into report_context.md.
     report_context_path: Path | None = None
 
+    # Original workbook filename(s) for this run (e.g. the .xlsm names), joined for
+    # display on the report cover's "Source:" line. None → field omitted from
+    # run_metadata.json and the skill falls back to whatever it can infer.
+    source_file: str | None = None
+
     marketplace: str = config.MARKETPLACE
     currency: str = config.CURRENCY
     pipeline_version: str = DEFAULT_PIPELINE_VERSION
@@ -335,6 +340,10 @@ def _build_run_metadata(inp: PackageInputs) -> dict:
     meta["pipeline_version"] = inp.pipeline_version
     meta["generated_at"] = inp.generated_at
     meta["currency"] = inp.currency
+    # Original workbook name(s) for the cover's "Source:" line. Omitted (not null)
+    # when unknown, so the skill never renders an empty/internal-artifact source.
+    if inp.source_file:
+        meta["source_file"] = inp.source_file
     return meta
 
 
