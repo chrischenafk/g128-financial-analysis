@@ -34,7 +34,6 @@ recomputes a business metric or re-derives an anomaly.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -356,56 +355,6 @@ def _unmapped_payout(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Summary-note parsing → the three note-derived channel figures
-# ─────────────────────────────────────────────────────────────────────────────
-# Dollar-amount patterns inside the free-text note strings.
-_NOTE_DOLLAR_RE = re.compile(r"\$([0-9,]+\.[0-9]{2})")          # "$4,854.60"
-_NOTE_SIGNED_DOLLAR_RE = re.compile(r"[+-]\$([0-9,]+\.[0-9]{2})")  # "+$32.99" / "-$32.99"
-
-
-def _extract_note_figures(summary: dict[str, float | None]) -> dict[str, float]:
-    """Extract dollar figures from a period's ``__note`` fields into the three keys
-    the channel caveats expect (``AD Cost Mapped``, ``Unsettled Referral Fee``,
-    ``Unallocated Credit``).
-
-    ``normalize_summary`` stores each Summary line's free-text note under a
-    ``"{line item}__note"`` key. The three caveats were perpetually skipped because
-    those figures live only in that prose, never as their own numeric line. This
-    pulls them out by pattern so the existing checks find populated keys.
-
-    Returns only the keys whose pattern matched — an empty dict when there are no
-    notes (older workbooks) or none match, so merging it is a safe no-op.
-    """
-    extracted: dict[str, float] = {}
-
-    for key, val in summary.items():
-        if not (key.endswith("__note") and val):
-            continue
-        note_str = str(val)
-        lowered = note_str.lower()
-
-        # AD Cost Mapped: a "Delayed partially" note means SKU-level ad mapping is
-        # incomplete; the mapped portion is the magnitude of that line's own value.
-        if "delayed partially" in lowered:
-            base_key = key[: -len("__note")]
-            numeric = summary.get(base_key)
-            if numeric is not None:
-                extracted[KEY_AD_COST_MAPPED] = abs(float(numeric))
-
-        # Unsettled Referral Fee: a plain dollar amount alongside "unsettled".
-        match = _NOTE_DOLLAR_RE.search(note_str)
-        if match and "unsettled" in lowered:
-            extracted[KEY_UNSETTLED_REFERRAL_FEE] = float(match.group(1).replace(",", ""))
-
-        # Unallocated Credit: a SIGNED dollar amount on a credit/marketplace note.
-        signed = _NOTE_SIGNED_DOLLAR_RE.search(note_str)
-        if signed and any(w in lowered for w in ("credit", "unallocated", "marketplace")):
-            extracted[KEY_UNALLOCATED_CREDIT] = float(signed.group(1).replace(",", ""))
-
-    return extracted
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Channel-level caveats (Summary notes + bridge residual)
 # ─────────────────────────────────────────────────────────────────────────────
 def _channel_caveats(
@@ -415,12 +364,7 @@ def _channel_caveats(
     warnings: list[DataQualityWarning],
     seen: set[tuple[str, Period | None]],
 ) -> None:
-    # Parse the Summary "Note" strings into the three note-derived figures and
-    # merge them in (non-destructively) so the existing checks below find populated
-    # keys. A directly-provided numeric key still wins on collision is irrelevant —
-    # these keys only ever arrive via notes. Empty dict when there are no notes.
-    raw_cur = summary_by_period.get(current_period) or {}
-    cur = {**raw_cur, **_extract_note_figures(raw_cur)}
+    cur = summary_by_period.get(current_period) or {}
 
     # AD-cost mapping gap: SKU-level ad analysis covers only the mapped portion.
     total_ad = _num(cur.get(KEY_TOTAL_AD_COST))
@@ -454,11 +398,7 @@ def _channel_caveats(
     # YoY unallocated credit: surfaced, never used to adjust SKU figures.
     yoy_baseline = _yoy_baseline_period(comparison)
     if yoy_baseline is not None:
-        # The credit note lives in the YoY *baseline* period (April-2025), a
-        # different dict than `cur`, so parse that period's notes too.
-        raw_yoy = summary_by_period.get(yoy_baseline) or {}
-        yoy_summary = {**raw_yoy, **_extract_note_figures(raw_yoy)}
-        credit = _num(yoy_summary.get(KEY_UNALLOCATED_CREDIT))
+        credit = _num((summary_by_period.get(yoy_baseline) or {}).get(KEY_UNALLOCATED_CREDIT))
         if credit is not None:
             _emit(warnings, seen, DataQualityWarning(
                 CODE_YOY_UNALLOCATED_CREDIT, yoy_baseline, DQSeverity.INFO, credit, None,

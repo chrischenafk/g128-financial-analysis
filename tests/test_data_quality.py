@@ -25,11 +25,7 @@ from src.analysis.data_quality import (
     CODE_UNSETTLED_REFERRAL_FEE,
     CODE_YOY_BRIDGE_RESIDUAL,
     CODE_YOY_UNALLOCATED_CREDIT,
-    KEY_AD_COST_MAPPED,
-    KEY_UNALLOCATED_CREDIT,
-    KEY_UNSETTLED_REFERRAL_FEE,
     DQSeverity,
-    _extract_note_figures,
     build_data_quality_report,
 )
 from src.ingest.excel_loader import LoadedWorkbook
@@ -294,56 +290,3 @@ def test_mom_only_run_no_yoy_caveats_no_crash() -> None:
     assert _by_code(report, CODE_YOY_UNALLOCATED_CREDIT) == []
     assert _by_code(report, CODE_YOY_BRIDGE_RESIDUAL) == []
     assert len(_by_code(report, CODE_UNMAPPED_ADS)) == 2
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Summary-note figure extraction
-# ─────────────────────────────────────────────────────────────────────────────
-def test_extract_note_figures_ad_cost_mapped() -> None:
-    # "Delayed partially" → the line's own magnitude becomes the mapped figure.
-    summary = {"Total AD Cost": -1861.55, "Total AD Cost__note": "Delayed partially"}
-    out = _extract_note_figures(summary)
-    assert out[KEY_AD_COST_MAPPED] == pytest.approx(1861.55)
-
-
-def test_extract_note_figures_unsettled_referral_fee() -> None:
-    summary = {"Total Referral Fee__note": "$4,854.60 unsettled"}
-    out = _extract_note_figures(summary)
-    assert out[KEY_UNSETTLED_REFERRAL_FEE] == pytest.approx(4854.60)
-
-
-def test_extract_note_figures_unallocated_credit() -> None:
-    summary = {"Total Other Expense__note": "+$32.99 unallocated credit"}
-    out = _extract_note_figures(summary)
-    assert out[KEY_UNALLOCATED_CREDIT] == pytest.approx(32.99)
-
-
-def test_extract_note_figures_empty_and_blank_notes_extract_nothing() -> None:
-    assert _extract_note_figures({}) == {}
-    assert _extract_note_figures({"Total Profit": 100.0}) == {}      # no __note keys
-    assert _extract_note_figures({"X__note": None, "Y__note": ""}) == {}  # blank notes
-    # A dollar amount with no "unsettled"/credit context matches nothing.
-    assert _extract_note_figures({"Z__note": "see $4,854.60 elsewhere"}) == {}
-
-
-def test_channel_caveats_surface_all_three_from_notes_end_to_end() -> None:
-    # The whole point: notes alone (no pre-populated numeric keys) drive all three
-    # caveats. The credit note sits in the YoY *baseline* (April-2025) dict.
-    summary = {
-        APR_2026: {
-            "Total Gross Sale": 32033.09,
-            "Total AD Cost": -2210.70,
-            "Total AD Cost__note": "Delayed partially",
-            "Total Referral Fee__note": "$4,854.60 unsettled",
-        },
-        APR_2025: {"Total Other Expense__note": "+$32.99 unallocated credit"},
-    }
-    report = build_data_quality_report(
-        [_loaded(YOY_PERIODS)], summary_by_period=summary,
-        comparison=_comparison(), current_period=APR_2026,
-    )
-    assert _by_code(report, CODE_AD_COST_MAPPING_GAP)
-    assert _by_code(report, CODE_UNSETTLED_REFERRAL_FEE)
-    credit = _by_code(report, CODE_YOY_UNALLOCATED_CREDIT)
-    assert credit and credit[0].period == APR_2025
-    assert credit[0].amount == pytest.approx(32.99)
