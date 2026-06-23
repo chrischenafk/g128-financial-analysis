@@ -66,6 +66,16 @@ CLAUDE_MAX_TOKENS: int = 8192
 # limit while CLAUDE_MAX_TOKENS stays for any other use.
 REPORT_MAX_TOKENS: int = 20000
 
+# Transient-error retry policy for the skill call. Overloaded/rate-limit/5xx
+# blips — including ones that surface mid-stream over a 200 response, which the
+# SDK's built-in retries do NOT cover — are retried with exponential backoff +
+# jitter before the run fails. This is the only place a sleep / wall-clock wait
+# is permitted: the isolated external LLM step, never the deterministic metric
+# path (AGENTS.md §8).
+LLM_MAX_RETRIES: int = 5
+LLM_RETRY_BASE_DELAY: float = 2.0   # seconds; the per-attempt ceiling doubles (2,4,8,16…)
+LLM_RETRY_MAX_DELAY: float = 60.0   # cap on any single backoff wait
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-backed settings (read-only load; values come from .env / the
 # environment). Secrets are never hardcoded and never logged.

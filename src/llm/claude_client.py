@@ -21,6 +21,8 @@ re-raised so ``main.py``'s top-level handler exits cleanly — never swallowed.
 from __future__ import annotations
 
 import json
+import random
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -193,6 +195,52 @@ def _skill_spec() -> dict:
     return {"type": "custom", "skill_id": config.SKILL_ID, "version": config.SKILL_VERSION}
 
 
+def _error_type(exc: Exception) -> str:
+    """The API error's ``error.type`` (e.g. 'overloaded_error') if present, else the
+    exception class name. Used both to decide retryability and to log it readably."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("type"):
+            return str(err["type"])
+    return type(exc).__name__
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """True for transient failures worth retrying (overloaded, rate-limit, 5xx,
+    connection drops/timeouts).
+
+    The tricky case is an ``overloaded_error`` that surfaces *mid-stream*: the HTTP
+    response was already 200 when streaming began, so ``status_code`` is 200 and the
+    SDK's own retry logic never fires. We fall back to the error *body's* type for
+    those. A ``BadRequestError`` (400) is deliberately excluded — a malformed
+    request or bad SKILL_ID won't fix itself on retry.
+    """
+    if isinstance(exc, (anthropic.APIConnectionError, anthropic.RateLimitError,
+                        anthropic.InternalServerError)):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and (status == 429 or status >= 500):
+            return True
+        # Mid-stream transient errors arrive over a 200 — status is unreliable, so
+        # key off the error type in the body instead.
+        if _error_type(exc) in {"overloaded_error", "api_error", "timeout_error"}:
+            return True
+    return False
+
+
+def _retry_delay(attempt: int) -> float:
+    """Exponential backoff with equal jitter for retry ``attempt`` (0-based).
+
+    Half the (capped, doubling) ceiling is fixed and half is random, so we always
+    wait a meaningful amount while desynchronizing retries. Jitter uses ``random``
+    — fine here: this is the isolated external LLM step, not the metric path."""
+    ceiling = min(config.LLM_RETRY_MAX_DELAY,
+                  config.LLM_RETRY_BASE_DELAY * (2 ** attempt))
+    return ceiling / 2 + random.uniform(0.0, ceiling / 2)
+
+
 def _skill_create(client, *, messages: list[dict], container: dict):
     """One Skills API call using streaming to support long-running operations.
 
@@ -200,29 +248,43 @@ def _skill_create(client, *, messages: list[dict], container: dict):
     made with ``messages.stream`` and resolved via ``get_final_message`` — the
     pause_turn loop in ``_drive_to_completion`` is unchanged (streaming is
     per-call). Skill-aware error handling is preserved.
+
+    Transient API errors (overloaded, rate-limit, 5xx, connection drops) — including
+    ones raised mid-stream, which the SDK's built-in retries miss — are retried with
+    exponential backoff before giving up. A bad request (400 / skill-config error)
+    is non-transient and re-raised immediately.
     """
-    try:
-        with client.beta.messages.stream(
-            model=_resolve_model(),
-            max_tokens=config.REPORT_MAX_TOKENS,
-            betas=BETAS,
-            container=container,
-            tools=[CODE_EXECUTION_TOOL],
-            messages=messages,
-        ) as stream:
-            response = stream.get_final_message()
-        return response
-    except anthropic.BadRequestError as exc:
-        if "skill" in str(exc).lower():
-            logger.error("Skill call rejected — check SKILL_ID/SKILL_VERSION (%s): %s",
-                         config.SKILL_ID, exc)
-        else:
-            logger.error("Bad request to the messages API: %s", exc)
-        raise
-    except anthropic.APIError as exc:
-        logger.error("Anthropic API error (status=%s): %s",
-                     getattr(exc, "status_code", None), exc)
-        raise
+    for attempt in range(config.LLM_MAX_RETRIES + 1):  # 1 initial try + N retries
+        try:
+            with client.beta.messages.stream(
+                model=_resolve_model(),
+                max_tokens=config.REPORT_MAX_TOKENS,
+                betas=BETAS,
+                container=container,
+                tools=[CODE_EXECUTION_TOOL],
+                messages=messages,
+            ) as stream:
+                return stream.get_final_message()
+        except anthropic.BadRequestError as exc:
+            if "skill" in str(exc).lower():
+                logger.error("Skill call rejected — check SKILL_ID/SKILL_VERSION (%s): %s",
+                             config.SKILL_ID, exc)
+            else:
+                logger.error("Bad request to the messages API: %s", exc)
+            raise
+        except anthropic.APIError as exc:
+            if attempt < config.LLM_MAX_RETRIES and _is_retryable(exc):
+                delay = _retry_delay(attempt)
+                logger.warning(
+                    "Transient Anthropic API error (%s) on skill call — retry %d/%d "
+                    "in %.1fs: %s",
+                    _error_type(exc), attempt + 1, config.LLM_MAX_RETRIES, delay, exc,
+                )
+                time.sleep(delay)
+                continue
+            logger.error("Anthropic API error (status=%s, type=%s): %s",
+                         getattr(exc, "status_code", None), _error_type(exc), exc)
+            raise
 
 
 def _drive_to_completion(client, response, messages: list[dict]):
@@ -356,14 +418,6 @@ def generate_report(
 
         # Step 3 — drive the pause_turn continuation loop
         response = _drive_to_completion(client, response, messages)
-
-        # Temporary debug — remove after diagnosis
-        for i, item in enumerate(response.content):
-            logger.debug("response.content[%d]: type=%s", i, item.type)
-            if hasattr(item, "text"):
-                logger.debug("  text=%s", item.text[:300])
-            if getattr(item, "type", None) == "bash_code_execution_tool_result":
-                logger.debug("  tool_result=%s", str(item)[:400])
 
         # Step 4 — extract file IDs and download the .docx
         _download_docx(client, response, output_path)

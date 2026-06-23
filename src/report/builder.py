@@ -201,33 +201,37 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
         logger.warning("_inject_charts: no anchor paragraphs found in %s — skipping.", docx_path.name)
         return docx_path
 
-    # Positional fallback: the skill occasionally references a chart far down the
-    # document (e.g. in an appendix) rather than in its section. If an anchor lands
-    # past paragraph 80 it is almost certainly misplaced — re-anchor it to just after
-    # the relevant section heading instead. The heading strings are stable because
+    # Positional fallback: the skill occasionally references a chart outside its
+    # section — too early (a stray mention in the cover-page caveats, before the
+    # Executive Summary) or too late (an appendix). A valid section anchor sits
+    # between paragraph 15 (the earliest the Executive Summary could start) and
+    # paragraph 80 (after which we're into the appendix). An anchor below 15 or
+    # above 80 is almost certainly misplaced — re-anchor it to just after the
+    # relevant section heading instead. The heading strings are stable because
     # section numbering is locked in the trigger message. If the anchor is already
-    # early (in its section), this never fires.
+    # in its section, this never fires.
     HEADING_FALLBACKS = {
         "bridge_mom": "3. MoM Performance",
         "bridge_yoy": "4. YoY / Seasonality Context",
     }
     for stem, heading_text in HEADING_FALLBACKS.items():
-        if stem in anchor_map and anchor_map[stem] > 80:
+        if stem in anchor_map and (anchor_map[stem] < 15 or anchor_map[stem] > 80):
+            misplacement = "cover page" if anchor_map[stem] < 15 else "appendix"
             for i, para in enumerate(doc.paragraphs):
                 if heading_text in para.text:
                     logger.warning(
-                        "_inject_charts: %s anchor at paragraph %d is past threshold "
-                        "(likely appendix) — falling back to heading position %d ('%s').",
-                        stem, anchor_map[stem], i, heading_text,
+                        "_inject_charts: %s anchor at paragraph %d is outside the valid "
+                        "section range (likely %s) — falling back to heading position %d ('%s').",
+                        stem, anchor_map[stem], misplacement, i, heading_text,
                     )
                     anchor_map[stem] = i + 1  # inject right after the heading
                     break
             else:
                 logger.warning(
-                    "_inject_charts: %s anchor at paragraph %d is past threshold "
-                    "(likely appendix) but heading '%s' was not found — leaving anchor "
-                    "in place. Section wording may have drifted.",
-                    stem, anchor_map[stem], heading_text,
+                    "_inject_charts: %s anchor at paragraph %d is outside the valid "
+                    "section range (likely %s) but heading '%s' was not found — leaving "
+                    "anchor in place. Section wording may have drifted.",
+                    stem, anchor_map[stem], misplacement, heading_text,
                 )
 
     # Diagnose a partial match: chart rendered locally but no anchor for it in the doc.

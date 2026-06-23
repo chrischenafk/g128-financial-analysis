@@ -223,6 +223,94 @@ def test_cleanup_failure_does_not_raise(tmp_path, monkeypatch, creds) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Transient-error retry
+# ─────────────────────────────────────────────────────────────────────────────
+class _FakeOverloaded(claude_client.anthropic.APIStatusError):
+    """An ``overloaded_error`` as it surfaces mid-stream: HTTP 200, error in body."""
+
+    def __init__(self) -> None:  # deliberately skip the SDK's response/body machinery
+        self.status_code = 200
+        self.body = {"type": "error",
+                     "error": {"type": "overloaded_error", "message": "Overloaded"}}
+
+    def __str__(self) -> str:
+        return "Overloaded"
+
+
+class _FakeBadRequest(claude_client.anthropic.BadRequestError):
+    """A non-transient 400 — must NOT be retried."""
+
+    def __init__(self) -> None:
+        self.status_code = 400
+        self.body = {"error": {"type": "invalid_request_error"}}
+
+    def __str__(self) -> str:
+        return "bad skill request"
+
+
+@pytest.fixture()
+def _no_sleep(monkeypatch):
+    """Make backoff instant so retry tests don't actually wait."""
+    monkeypatch.setattr(claude_client.time, "sleep", lambda _s: None)
+
+
+def test_overloaded_error_retries_then_succeeds(tmp_path, monkeypatch, creds, _no_sleep) -> None:
+    pkg = _make_package(tmp_path)
+    client = _client()
+    # First stream call raises overloaded mid-stream; the retry succeeds.
+    client.beta.messages.stream.side_effect = [
+        _FakeOverloaded(),
+        _stream_cm(_response("end_turn", file_ids=("file_doc",))),
+    ]
+    _patch_client(monkeypatch, client)
+
+    result = claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
+    assert result.exists()
+    assert client.beta.messages.stream.call_count == 2  # one failure + one success
+
+
+def test_overloaded_error_exhausts_retries_then_raises(tmp_path, monkeypatch, creds, _no_sleep) -> None:
+    pkg = _make_package(tmp_path)
+    monkeypatch.setattr(config, "LLM_MAX_RETRIES", 2)  # 1 initial + 2 retries = 3 tries
+    client = _client()
+    client.beta.messages.stream.side_effect = [_FakeOverloaded() for _ in range(3)]
+    _patch_client(monkeypatch, client)
+
+    with pytest.raises(claude_client.anthropic.APIStatusError):
+        claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
+    assert client.beta.messages.stream.call_count == 3
+    # Uploaded files are still cleaned up despite the failure.
+    assert client.beta.files.delete.call_count == len(PACKAGE_FILES)
+
+
+def test_bad_request_is_not_retried(tmp_path, monkeypatch, creds, _no_sleep) -> None:
+    pkg = _make_package(tmp_path)
+    client = _client()
+    client.beta.messages.stream.side_effect = [_FakeBadRequest(), _FakeBadRequest()]
+    _patch_client(monkeypatch, client)
+
+    with pytest.raises(claude_client.anthropic.BadRequestError):
+        claude_client.generate_report(pkg, output_dir=tmp_path / "reports")
+    assert client.beta.messages.stream.call_count == 1  # no retry on a 400
+
+
+def test_is_retryable_classification() -> None:
+    assert claude_client._is_retryable(_FakeOverloaded()) is True
+    assert claude_client._is_retryable(_FakeBadRequest()) is False
+    assert claude_client._error_type(_FakeOverloaded()) == "overloaded_error"
+
+
+def test_retry_delay_bounded_and_grows(monkeypatch) -> None:
+    monkeypatch.setattr(config, "LLM_RETRY_BASE_DELAY", 2.0)
+    monkeypatch.setattr(config, "LLM_RETRY_MAX_DELAY", 60.0)
+    # Equal jitter: each delay sits in [ceiling/2, ceiling]; never exceeds the cap.
+    for attempt in range(8):
+        d = claude_client._retry_delay(attempt)
+        ceiling = min(60.0, 2.0 * (2 ** attempt))
+        assert ceiling / 2 <= d <= ceiling
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stub (dry run)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_generate_report_stub_writes_placeholder(tmp_path) -> None:
