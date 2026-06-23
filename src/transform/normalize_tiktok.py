@@ -305,7 +305,21 @@ def normalize_summary(summary_raw: pd.DataFrame) -> dict[Period, dict[str, float
             f"Summary sheet's first row: {header}."
         )
 
+    # Locate the optional free-text "Note" column (discover-don't-assume, same as
+    # the period columns). Its per-line strings carry deferred data-quality figures
+    # (mapped ad cost, unsettled referral fee, an unallocated marketplace credit)
+    # that channel caveats parse downstream. We store each row's note under a
+    # "{line item}__note" key: the suffix can never collide with a numeric line
+    # item, so the float-coercion below never touches it and existing numeric-key
+    # consumers (writer, metrics) ignore it. Optional — older workbooks omit it.
+    note_col: int | None = None
+    for col_idx, cell in enumerate(header):
+        if isinstance(cell, str) and cell.strip().lower() == "note":
+            note_col = col_idx
+            break
+
     result: dict[Period, dict[str, float | None]] = {p: {} for p in period_cols.values()}
+    note_count = 0
     for row_idx in range(1, len(summary_raw)):
         name = summary_raw.iat[row_idx, 0]
         if not isinstance(name, str) or not name.strip():
@@ -316,10 +330,32 @@ def normalize_summary(summary_raw: pd.DataFrame) -> dict[Period, dict[str, float
             number = pd.to_numeric(raw_value, errors="coerce")
             result[period][line_item] = None if pd.isna(number) else float(number)
 
+        # The Note column is a single shared column; attach its text to every
+        # period for this line item. Blank / NaN notes are skipped silently (no
+        # None __note key) — a note is either present text or absent.
+        if note_col is not None:
+            note = summary_raw.iat[row_idx, note_col]
+            if isinstance(note, str) and note.strip():
+                note_str = note.strip()
+                # DEBUG so the first real run reveals the exact strings present —
+                # the downstream patterns are calibrated against these.
+                logger.debug("Summary note [%s]: %r", line_item, note_str)
+                for period in period_cols.values():
+                    result[period][f"{line_item}__note"] = note_str
+                note_count += 1
+
+    if note_col is not None:
+        logger.debug("Note column found at col %d — %d note string(s) extracted.",
+                     note_col, note_count)
+    else:
+        logger.debug("No 'Note' column in the Summary header — skipping note parsing (optional).")
+
     logger.info(
         "Normalized Summary: %d period(s) × %s line items.",
         len(result),
-        {str(p): len(items) for p, items in result.items()},
+        # Count only the numeric line items, not the __note companions.
+        {str(p): sum(1 for k in items if not k.endswith("__note"))
+         for p, items in result.items()},
     )
     return result
 

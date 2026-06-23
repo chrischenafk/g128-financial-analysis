@@ -192,3 +192,41 @@ def test_summary_without_period_header_raises() -> None:
     raw = pd.DataFrame([["Summaries", "nope", "still nope"], ["Total Gross Sale", 1, 2]])
     with pytest.raises(ValueError, match="period header"):
         normalize_summary(raw)
+
+
+def test_summary_note_column_captured_under_note_keys() -> None:
+    # Header carries a "Note" column; rows with note text get a "{line}__note" key.
+    raw = pd.DataFrame(
+        [
+            ["Summaries", MAR, APR, "Note"],
+            ["Total AD Cost", -2000.0, -2210.70, "Delayed partially"],
+            ["Total Referral Fee", -500.0, -291.28, "$4,854.60 unsettled"],
+            ["Total Profit", 12490.01, 7595.09, None],   # blank note → no __note key
+        ]
+    )
+    summary = normalize_summary(raw)
+    apr = summary[Period(2026, 4)]
+
+    # Notes captured for rows that have text, numeric values left untouched.
+    assert apr["Total AD Cost__note"] == "Delayed partially"
+    assert apr["Total Referral Fee__note"] == "$4,854.60 unsettled"
+    assert apr["Total AD Cost"] == pytest.approx(-2210.70)
+    # A blank/NaN note adds no __note key (no None value sneaks in).
+    assert "Total Profit__note" not in apr
+    # The single Note column applies to every period column.
+    assert summary[Period(2026, 3)]["Total AD Cost__note"] == "Delayed partially"
+
+
+def test_summary_without_note_column_has_no_note_keys() -> None:
+    # No "Note" header → existing behavior is unchanged, no __note keys, no error.
+    raw = pd.DataFrame(
+        [
+            ["Summaries", MAR, APR],
+            ["Total Gross Sale", 66710.72, 32033.09],
+            ["Total Profit", 12490.01, 7595.09],
+        ]
+    )
+    summary = normalize_summary(raw)
+    apr = summary[Period(2026, 4)]
+    assert apr["Total Gross Sale"] == pytest.approx(32033.09)
+    assert not any(k.endswith("__note") for k in apr)
