@@ -45,6 +45,11 @@ venv/
 .claude/
 
 # ─────────────────────────────────────────────────────────────
+# Batch scripts
+# ─────────────────────────────────────────────────────────────
+run_report.bat
+
+# ─────────────────────────────────────────────────────────────
 # NOTE: .md docs, .env.example, and everything under src/, tests/,
 # and docs/ are intentionally tracked.
 #
