@@ -22,7 +22,7 @@ SQLAlchemy>=2.0        # portable ORM/Core — SQLite now, SQL Server later
 python-dotenv>=1.0     # load .env into the environment (keys never hardcoded)
 
 # ── LLM (used later, last layer) ─────────────────────────────
-anthropic>=0.40        # Claude Platform SDK — external skill call, stubbed first
+anthropic==0.109.2        # Claude Platform SDK — external skill call, stubbed first
 
 # ── Testing ──────────────────────────────────────────────────
 pytest>=8.0            # tests for every fact-producing module
