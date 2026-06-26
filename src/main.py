@@ -136,7 +136,11 @@ def assert_anchor_match(mom_normalized, yoy_normalized, current_period: Period) 
     comparison would be meaningless. This is deliberately NOT caught downstream.
     """
     if mom_normalized is None or yoy_normalized is None:
-        return  # single-lens run — nothing to cross-check
+        # Single-lens run — there is no second file to cross-check against, so the
+        # anchor match doesn't apply. Skip it cleanly (not silently).
+        present = "MoM" if mom_normalized is not None else "YoY"
+        logger.info("VD1 skipped — single-file run (%s only).", present)
+        return
     mg, mp = _current_totals(mom_normalized, current_period)
     yg, yp = _current_totals(yoy_normalized, current_period)
     if abs(mg - yg) > ANCHOR_EPS or abs(mp - yp) > ANCHOR_EPS:

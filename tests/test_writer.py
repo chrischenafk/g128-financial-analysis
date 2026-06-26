@@ -182,6 +182,7 @@ def test_run_metadata_shape_and_labels(tmp_path: Path) -> None:
     assert meta["yoy_baseline"] == {"label": "April 2025", "start": "2025-04-01", "end": "2025-04-30"}
     assert meta["generated_at"] == GEN_AT
     assert meta["currency"] == "USD"
+    assert meta["run_type"] == "MoM+YoY"  # both files present
 
 
 def test_channel_metrics_required_fields(tmp_path: Path) -> None:
@@ -308,6 +309,8 @@ def test_mom_only_run_omits_yoy(tmp_path: Path) -> None:
     cm = _read_json(pkg / "channel_metrics.json")
     assert "yoy" not in cm and "bridge_yoy" not in cm
     assert "mom" in cm
+    # run_type marks this as a single-lens run so the skill omits the YoY section.
+    assert meta["run_type"] == "MoM"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
