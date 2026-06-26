@@ -65,6 +65,7 @@ CLAUDE_MAX_TOKENS: int = 8192
 # from a large package.json needs a high output ceiling, so it gets its own
 # limit while CLAUDE_MAX_TOKENS stays for any other use.
 REPORT_MAX_TOKENS: int = 20000
+LLM_MAX_RETRIES: int = 3
 
 # Transient-error retry policy for the skill call. Overloaded/rate-limit/5xx
 # blips — including ones that surface mid-stream over a 200 response, which the
