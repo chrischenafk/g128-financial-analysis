@@ -160,18 +160,29 @@ def test_missing_target_period_errors_before_loading(wired) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # MoM-only run
 # ─────────────────────────────────────────────────────────────────────────────
-def test_mom_only_run_no_crash(wired) -> None:
+def test_mom_only_run_no_crash(wired, monkeypatch) -> None:
     # Only the MoM file is present and valid.
     main_mod.scan_raw_files.return_value = [MOM_PATH]
     main_mod.parse_and_validate.side_effect = lambda p: {MOM_PATH: MOM_FP}[p]
     main_mod.normalize_workbook.side_effect = [_normalized(1000.0, 200.0, MAR)]
 
+    # Capture INFO from main's logger (propagate=False → caplog can't see it).
+    info_msgs: list[str] = []
+    monkeypatch.setattr(
+        main_mod.logger, "info",
+        lambda msg, *args, **kwargs: info_msgs.append(msg % args if args else msg),
+    )
+
     assert main_mod.main([]) == 0
-    # YoY baseline absent in the package inputs / manifest.
+    # VD1 anchor match is skipped cleanly on a single-file run (logged, not silent).
+    assert any("VD1 skipped" in m for m in info_msgs), info_msgs
+    # YoY baseline absent in the package inputs / manifest; source is the MoM file
+    # alone (no " + " join).
     main_mod.write_package.assert_called_once()
     inputs = main_mod.write_package.call_args.args[0]
     assert inputs.yoy_baseline is None
     assert inputs.mom_baseline == MAR
+    assert inputs.source_file == MOM_PATH.name
     manifest = json.loads(config.MANIFEST.read_text(encoding="utf-8"))
     assert manifest["2026-04"]["yoy_file"] is None
 

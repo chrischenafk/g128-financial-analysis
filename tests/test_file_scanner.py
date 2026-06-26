@@ -12,7 +12,19 @@ from pathlib import Path
 
 import pytest
 
+from src.ingest import file_scanner
 from src.ingest.file_scanner import scan_raw_files
+
+
+def _capture_info(monkeypatch) -> list[str]:
+    """Record formatted INFO messages from the scanner's logger (which has
+    propagate=False, so caplog can't see them)."""
+    msgs: list[str] = []
+    monkeypatch.setattr(
+        file_scanner.logger, "info",
+        lambda msg, *args, **kwargs: msgs.append(msg % args if args else msg),
+    )
+    return msgs
 
 
 def _touch(directory: Path, name: str) -> Path:
@@ -48,6 +60,18 @@ def test_case_insensitive_extension(tmp_path: Path) -> None:
     # A .XLSM (uppercase) is still a real workbook.
     upper = _touch(tmp_path, "Report_2026_04.XLSM")
     assert scan_raw_files(tmp_path) == [upper]
+
+
+def test_single_file_is_valid_and_logs_yoy_skip(tmp_path: Path, monkeypatch) -> None:
+    # One workbook is a valid (partial) run — no error — and the scanner logs
+    # that the YoY lens will be skipped.
+    only = _touch(tmp_path, "Tiktok_SKULevel_Profit_2026_03_vs_2026_04.xlsm")
+    msgs = _capture_info(monkeypatch)
+
+    result = scan_raw_files(tmp_path)
+
+    assert result == [only]
+    assert any("YoY lens will be skipped" in m for m in msgs), msgs
 
 
 def test_empty_directory_returns_empty_list(tmp_path: Path) -> None:

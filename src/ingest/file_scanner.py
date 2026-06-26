@@ -62,6 +62,12 @@ def scan_raw_files(directory: Path = config.DATA_RAW) -> list[Path]:
 
     if not candidates:
         logger.info("No .xlsm workbooks found in %s — nothing to do.", directory)
+    elif len(candidates) == 1:
+        # One workbook is a valid (partial) run: only one of the MoM/YoY lenses
+        # is present, so the second lens is skipped cleanly downstream. The
+        # scanner can't yet know which lens this is (period_parser classifies it
+        # from the period gap); the common single-file case is MoM-only.
+        logger.info("Found 1 workbook — YoY lens will be skipped.")
     else:
         logger.info("Found %d candidate workbook(s) in %s.", len(candidates), directory)
 

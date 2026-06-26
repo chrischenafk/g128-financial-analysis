@@ -114,6 +114,10 @@ _TRIGGER_MESSAGE_PROCESSED = (
     "Target report length: 8-10 pages equivalent. "
     "Do not exceed 5,500 words total across all sections combined. "
     "If a section is complete, move on — do not pad or restate.\n"
+    "RUN TYPE — single-lens handling:\n"
+    "If run_metadata.run_type is 'MoM', the package contains only MoM data. "
+    "Omit Section 4 (YoY / Seasonality Context) and the YoY bridge chart entirely. "
+    "Do not reference YoY figures anywhere in the report. Adjust the cover subtitle accordingly.\n"
     "{chart_note}\n"
     "The package is the source of truth — do not recompute any metric."
 )

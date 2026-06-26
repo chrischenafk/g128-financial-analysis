@@ -437,6 +437,10 @@ def compare(
     revenue_yoy = revenue_bridge(yoy_baseline, current) if yoy_baseline else None
     cost_mom = cost_bridge(mom_baseline, current, residual_threshold) if mom_baseline else None
     cost_yoy = cost_bridge(yoy_baseline, current, residual_threshold) if yoy_baseline else None
+    if yoy_baseline is None:
+        # No YoY file in this run — the YoY revenue/cost bridges are absent by
+        # design (left as None), not an error to surface downstream.
+        logger.info("YoY comparisons skipped — no YoY file provided.")
 
     sku_deltas = _sku_deltas(current, mom_baseline, yoy_baseline)
 

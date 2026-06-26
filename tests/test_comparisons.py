@@ -17,6 +17,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from src.analysis import comparisons as comparisons_mod
 from src.analysis.comparisons import (
     COST_BRIDGE_LINES,
     PeriodData,
@@ -225,6 +226,25 @@ def test_yoy_only_run_mom_lens_absent_and_no_movers() -> None:
     assert pd.isna(deltas.loc["FG-A", "profit_delta_mom"])
     assert deltas.loc["FG-A", "status_mom"] is None
     assert result.structural_movers.empty
+
+
+def test_yoy_baseline_none_skips_yoy_bridge_and_logs(monkeypatch) -> None:
+    # No YoY file in the run: the YoY bridges come back None with no error, and
+    # the skip is logged at INFO (not silently dropped).
+    current = _period(APR_2026, [("FG-A", 10, 1000.0, 200.0)])
+    mom = _period(MAR_2026, [("FG-A", 8, 800.0, 150.0)])
+    msgs: list[str] = []
+    monkeypatch.setattr(
+        comparisons_mod.logger, "info",
+        lambda msg, *args, **kwargs: msgs.append(msg % args if args else msg),
+    )
+
+    result = compare(current, mom_baseline=mom, yoy_baseline=None)
+
+    assert result.revenue_bridge_yoy is None
+    assert result.cost_bridge_yoy is None
+    assert result.structural_movers.empty
+    assert any("YoY comparisons skipped" in m for m in msgs), msgs
 
 
 def test_compare_requires_at_least_one_baseline() -> None:

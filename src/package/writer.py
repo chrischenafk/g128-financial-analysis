@@ -337,6 +337,10 @@ def _build_run_metadata(inp: PackageInputs) -> dict:
         meta["mom_baseline"] = _period_block(inp.mom_baseline)
     if inp.yoy_baseline is not None and _has_yoy(inp.comparison):
         meta["yoy_baseline"] = _period_block(inp.yoy_baseline)
+    # Which lenses this package carries, so the skill knows which sections to
+    # write. "MoM" → single-file run: omit Section 4 (YoY/Seasonality) and the
+    # YoY bridge. "MoM+YoY" → the full two-file run.
+    meta["run_type"] = "MoM+YoY" if _has_yoy(inp.comparison) else "MoM"
     meta["pipeline_version"] = inp.pipeline_version
     meta["generated_at"] = inp.generated_at
     meta["currency"] = inp.currency

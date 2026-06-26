@@ -169,6 +169,22 @@ def test_parse_and_validate_yoy_success(tmp_path: Path) -> None:
     assert result.comparison_type == "YoY"
 
 
+def test_single_file_returns_one_fileperiods_with_type(tmp_path: Path) -> None:
+    # The parser works on ONE file at a time and never needs a second file:
+    # a single workbook yields exactly one validated FilePeriods, with the
+    # comparison_type inferred from the filename's period gap. This is what makes
+    # a MoM-only (no YoY file) run possible.
+    path = tmp_path / MOM_NAME
+    _make_workbook(
+        path,
+        headers=["03/01/2026 - 03/31/2026", "04/01/2026 - 04/30/2026"],
+    )
+    result = parse_and_validate(path)
+    assert isinstance(result, FilePeriods)
+    assert result.comparison_type == "MoM"
+    assert result.current == Period(2026, 4)
+
+
 def test_cross_check_mismatch_raises(tmp_path: Path) -> None:
     # Filename claims 2026-03 vs 2026-04, but the workbook headers are a
     # different (YoY-shaped) pair → the gate must fire.
