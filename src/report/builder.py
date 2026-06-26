@@ -168,8 +168,19 @@ def _inject_charts(docx_path: Path, charts: list[Path]) -> Path:
     # filename stem → anchor text variants to search for. The skill references the
     # charts inconsistently (with/without ".png", or in prose like "MoM bridge"),
     # so we match any variant rather than the literal filename alone.
+    # The generic "Profit bridge:" / "profit bridge" variants live ONLY on
+    # bridge_mom: the skill captions the bridge as "Profit bridge: <from> → <to>"
+    # (no MoM/YoY token). In a MoM-only run that bare caption is the sole bridge,
+    # so bridge_mom must match it. In a two-file run the MoM section precedes the
+    # YoY one, so the FIRST "Profit bridge:" is the MoM caption — bridge_mom claims
+    # it correctly. bridge_yoy deliberately keeps only its YoY-specific variants so
+    # the two stems can't both anchor to that same first caption.
     ANCHORS = {
-        "bridge_mom": ["bridge_mom.png", "bridge_mom", "MoM Profit Bridge", "MoM bridge"],
+        "bridge_mom": [
+            "bridge_mom.png", "bridge_mom",
+            "MoM Profit Bridge", "MoM bridge",
+            "Profit bridge:", "profit bridge",
+        ],
         "bridge_yoy": ["bridge_yoy.png", "bridge_yoy", "YoY Profit Bridge", "YoY bridge"],
     }
 
